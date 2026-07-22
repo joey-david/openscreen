@@ -228,6 +228,7 @@ interface Window {
 		preparePreviewAudioTrack: (filePath: string) => Promise<{
 			success: boolean;
 			path?: string | null;
+			startTime?: number;
 			message?: string;
 			error?: string;
 		}>;

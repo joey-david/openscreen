@@ -142,16 +142,6 @@ function runProcess(
 	});
 }
 
-function parseAfinfoAudioTrackBitrates(output: string): number[] {
-	const bitrates: number[] = [];
-	const trackSections = output.split(/\n----\n/g).slice(1);
-	for (const section of trackSections) {
-		const match = section.match(/\bbit rate:\s*([0-9]+)\s*bits per second/i);
-		bitrates.push(match ? Number(match[1]) : 0);
-	}
-	return bitrates;
-}
-
 async function prepareSupplementalPreviewAudioTrack(videoPath: string) {
 	const normalizedPath = await approveReadableVideoPath(videoPath);
 	if (!normalizedPath) {
@@ -165,22 +155,25 @@ async function prepareSupplementalPreviewAudioTrack(videoPath: string) {
 		return { success: true, path: null };
 	}
 
-	const afinfo = await runProcess("/usr/bin/afinfo", [normalizedPath]);
-	if (afinfo.code !== 0) {
+	let audioTracks;
+	try {
+		const { readMp4AudioTrackTimings } = await import("../recording/mp4-audio-timing");
+		audioTracks = await readMp4AudioTrackTimings(normalizedPath);
+	} catch {
 		return { success: true, path: null };
 	}
 
-	const bitrates = parseAfinfoAudioTrackBitrates(`${afinfo.stdout}\n${afinfo.stderr}`);
-	if (bitrates.length <= 1) {
+	if (audioTracks.length <= 1) {
 		return { success: true, path: null };
 	}
 
 	let supplementalTrackIndex = 1;
-	for (let index = 2; index < bitrates.length; index += 1) {
-		if (bitrates[index] > bitrates[supplementalTrackIndex]) {
+	for (let index = 2; index < audioTracks.length; index += 1) {
+		if (audioTracks[index].bitrate > audioTracks[supplementalTrackIndex].bitrate) {
 			supplementalTrackIndex = index;
 		}
 	}
+	const startTime = audioTracks[supplementalTrackIndex].startTime;
 
 	await fs.mkdir(PREVIEW_AUDIO_DIR, { recursive: true });
 	const sourceStat = await fs.stat(normalizedPath);
@@ -193,7 +186,7 @@ async function prepareSupplementalPreviewAudioTrack(videoPath: string) {
 	try {
 		const outputStat = await fs.stat(outputPath);
 		if (outputStat.mtimeMs >= sourceStat.mtimeMs) {
-			return { success: true, path: pathToFileURL(outputPath).toString() };
+			return { success: true, path: pathToFileURL(outputPath).toString(), startTime };
 		}
 	} catch {
 		// Generate below.
@@ -216,7 +209,7 @@ async function prepareSupplementalPreviewAudioTrack(videoPath: string) {
 		};
 	}
 
-	return { success: true, path: pathToFileURL(outputPath).toString() };
+	return { success: true, path: pathToFileURL(outputPath).toString(), startTime };
 }
 
 async function approveReadableVideoPath(

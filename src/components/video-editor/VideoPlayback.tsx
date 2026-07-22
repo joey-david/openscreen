@@ -69,6 +69,7 @@ import {
 	type ZoomFocus,
 	type ZoomRegion,
 } from "./types";
+import { getSupplementalAudioPosition } from "./videoPlayback/audioSync";
 import { AUTO_FOLLOW_PARAMS, DEFAULT_FOCUS } from "./videoPlayback/constants";
 import { advanceFollowFocus } from "./videoPlayback/cursorFollowUtils";
 import {
@@ -294,7 +295,10 @@ const VideoPlayback = forwardRef<VideoPlaybackRef, VideoPlaybackProps>(
 		const timeUpdateAnimationRef = useRef<number | null>(null);
 		const [pixiReady, setPixiReady] = useState(false);
 		const [videoReady, setVideoReady] = useState(false);
-		const [supplementalAudioPath, setSupplementalAudioPath] = useState<string | null>(null);
+		const [supplementalAudioTrack, setSupplementalAudioTrack] = useState<{
+			path: string;
+			startTime: number;
+		} | null>(null);
 		const [overlaySize, setOverlaySize] = useState({ width: 800, height: 600 });
 		const [overlayElement, setOverlayElement] = useState<HTMLDivElement | null>(null);
 		const overlayRef = useRef<HTMLDivElement | null>(null);
@@ -632,18 +636,28 @@ const VideoPlayback = forwardRef<VideoPlaybackRef, VideoPlaybackProps>(
 				try {
 					allowPlaybackRef.current = true;
 					enableAllPreviewAudioTracks(vid);
-					await vid.play().catch((err) => {
-						console.log("PLAY ERROR:", err);
-						throw err;
-					});
+					let supplementalPlay = Promise.resolve();
 					const supplementalAudio = supplementalAudioRef.current;
 					if (supplementalAudio) {
-						supplementalAudio.currentTime = vid.currentTime;
+						const position = getSupplementalAudioPosition(
+							vid.currentTime,
+							supplementalAudioTrack?.startTime ?? 0,
+						);
+						supplementalAudio.currentTime = position.currentTime;
 						supplementalAudio.playbackRate = vid.playbackRate;
-						await supplementalAudio.play().catch(() => {
-							// The main video remains the source of truth for playback state.
-						});
+						if (position.shouldPlay) {
+							supplementalPlay = supplementalAudio.play().catch(() => {
+								// The main video remains the source of truth for playback state.
+							});
+						}
 					}
+					await Promise.all([
+						vid.play().catch((err) => {
+							console.log("PLAY ERROR:", err);
+							throw err;
+						}),
+						supplementalPlay,
+					]);
 				} catch (error) {
 					allowPlaybackRef.current = false;
 					throw error;
@@ -1100,7 +1114,7 @@ const VideoPlayback = forwardRef<VideoPlaybackRef, VideoPlaybackProps>(
 				lastResolvedDurationRef.current = null;
 				isResolvingDurationRef.current = false;
 				setVideoReady(false);
-				setSupplementalAudioPath(null);
+				setSupplementalAudioTrack(null);
 				return;
 			}
 
@@ -1109,12 +1123,16 @@ const VideoPlayback = forwardRef<VideoPlaybackRef, VideoPlaybackProps>(
 				?.preparePreviewAudioTrack?.(videoPath)
 				.then((result) => {
 					if (!cancelled) {
-						setSupplementalAudioPath(result.success ? (result.path ?? null) : null);
+						setSupplementalAudioTrack(
+							result.success && result.path
+								? { path: result.path, startTime: result.startTime ?? 0 }
+								: null,
+						);
 					}
 				})
 				.catch(() => {
 					if (!cancelled) {
-						setSupplementalAudioPath(null);
+						setSupplementalAudioTrack(null);
 					}
 				});
 
@@ -1149,7 +1167,7 @@ const VideoPlayback = forwardRef<VideoPlaybackRef, VideoPlaybackProps>(
 		useEffect(() => {
 			const video = videoRef.current;
 			const supplementalAudio = supplementalAudioRef.current;
-			if (!video || !supplementalAudio || !supplementalAudioPath) {
+			if (!video || !supplementalAudio || !supplementalAudioTrack) {
 				return;
 			}
 
@@ -1159,22 +1177,27 @@ const VideoPlayback = forwardRef<VideoPlaybackRef, VideoPlaybackProps>(
 				) ?? null;
 			supplementalAudio.playbackRate = activeSpeedRegion ? activeSpeedRegion.speed : 1;
 
-			if (!isPlaying) {
+			const position = getSupplementalAudioPosition(
+				isPlaying ? video.currentTime : currentTime,
+				supplementalAudioTrack.startTime,
+			);
+
+			if (!isPlaying || !position.shouldPlay) {
 				supplementalAudio.pause();
-				if (Math.abs(supplementalAudio.currentTime - currentTime) > 0.05) {
-					supplementalAudio.currentTime = currentTime;
+				if (Math.abs(supplementalAudio.currentTime - position.currentTime) > 0.05) {
+					supplementalAudio.currentTime = position.currentTime;
 				}
 				return;
 			}
 
-			if (Math.abs(supplementalAudio.currentTime - video.currentTime) > 0.15) {
-				supplementalAudio.currentTime = video.currentTime;
+			if (Math.abs(supplementalAudio.currentTime - position.currentTime) > 0.15) {
+				supplementalAudio.currentTime = position.currentTime;
 			}
 
 			supplementalAudio.play().catch(() => {
 				// Keep video playback running even if supplemental preview audio is unavailable.
 			});
-		}, [currentTime, isPlaying, speedRegions, supplementalAudioPath]);
+		}, [currentTime, isPlaying, speedRegions, supplementalAudioTrack]);
 
 		useEffect(() => {
 			if (!pixiReady || !videoReady) return;
@@ -2184,8 +2207,8 @@ const VideoPlayback = forwardRef<VideoPlaybackRef, VideoPlaybackProps>(
 					}}
 					onError={() => onError("Failed to load video")}
 				/>
-				{supplementalAudioPath && (
-					<audio ref={supplementalAudioRef} src={supplementalAudioPath} preload="auto" />
+				{supplementalAudioTrack && (
+					<audio ref={supplementalAudioRef} src={supplementalAudioTrack.path} preload="auto" />
 				)}
 			</div>
 		);
