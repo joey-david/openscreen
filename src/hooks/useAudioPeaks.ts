@@ -1,68 +1,117 @@
 import { useEffect, useRef, useState } from "react";
-import { loadFileAsArrayBuffer } from "@/lib/exporter/streamingDecoder";
+import { WebDemuxer } from "web-demuxer";
+import { StreamingVideoDecoder } from "@/lib/exporter/streamingDecoder";
 
-let _audioCtx: AudioContext | null = null;
-/** Returns the shared AudioContext, creating it lazily on first call. */
-function getAudioCtx(): AudioContext {
-	if (!_audioCtx) _audioCtx = new AudioContext();
-	return _audioCtx;
+const PEAKS_PER_SECOND = 200;
+const MAX_PEAK_PAIRS = 24_000;
+const DECODE_BACKPRESSURE_LIMIT = 8;
+
+function isRemoteUrl(videoUrl: string) {
+	return /^(https?:|blob:|data:)/i.test(videoUrl);
 }
 
-/**
- * Offloads peak computation to a Web Worker (zero-copy via Transferable).
- * On abort, the worker is terminated and the promise rejects with AbortError.
- */
-function computePeaksInWorker(
-	audioBuffer: AudioBuffer,
-	signal?: AbortSignal,
-): Promise<Float32Array> {
-	return new Promise((resolve, reject) => {
-		if (signal?.aborted) {
-			reject(new DOMException("Aborted", "AbortError"));
-			return;
-		}
+async function loadSourceFile(videoUrl: string): Promise<File> {
+	const source =
+		!isRemoteUrl(videoUrl) && window.electronAPI
+			? await StreamingVideoDecoder.loadLocalSourceFile(videoUrl)
+			: await StreamingVideoDecoder.loadRemoteSourceFile(videoUrl);
+	return source.file;
+}
 
-		const worker = new Worker(new URL("./audioPeaksWorker.ts", import.meta.url), {
-			type: "module",
-		});
+/** Decode one packet at a time and fold its samples into fixed timeline bins. */
+async function computeAudioPeaks(videoUrl: string, signal: AbortSignal): Promise<Float32Array> {
+	const file = await loadSourceFile(videoUrl);
+	if (signal.aborted) throw new DOMException("Aborted", "AbortError");
 
-		const onAbort = () => {
-			worker.terminate();
-			reject(new DOMException("Aborted", "AbortError"));
-		};
-		signal?.addEventListener("abort", onAbort, { once: true });
+	const wasmUrl = new URL("./wasm/web-demuxer.wasm", window.location.href).href;
+	const demuxer = new WebDemuxer({ wasmFilePath: wasmUrl });
+	let decoder: AudioDecoder | null = null;
+	try {
+		await demuxer.load(file);
+		const mediaInfo = await demuxer.getMediaInfo();
+		const audioStream = mediaInfo.streams.find((stream) => stream.codec_type_string === "audio");
+		if (!audioStream) return new Float32Array(0);
 
-		// slice() creates an owned copy so the transfer is safe and the
-		// AudioBuffer remains valid if anything else holds a reference.
-		const channels: Float32Array[] = [];
-		for (let c = 0; c < audioBuffer.numberOfChannels; c++) {
-			channels.push(audioBuffer.getChannelData(c).slice());
-		}
-
-		worker.onmessage = (e: MessageEvent<Float32Array>) => {
-			signal?.removeEventListener("abort", onAbort);
-			worker.terminate();
-			resolve(e.data);
-		};
-
-		worker.onerror = (e) => {
-			signal?.removeEventListener("abort", onAbort);
-			worker.terminate();
-			reject(e);
-		};
-
-		worker.postMessage(
-			{ channels, duration: audioBuffer.duration },
-			channels.map((ch) => ch.buffer),
+		const duration = Math.max(
+			Number.isFinite(mediaInfo.duration) ? mediaInfo.duration : 0,
+			typeof audioStream.duration === "number" && Number.isFinite(audioStream.duration)
+				? audioStream.duration
+				: 0,
 		);
-	});
+		if (duration <= 0) return new Float32Array(0);
+
+		const decoderConfig = await demuxer.getDecoderConfig("audio");
+		const support = await AudioDecoder.isConfigSupported(decoderConfig);
+		if (!support.supported) throw new Error(`Unsupported audio codec: ${decoderConfig.codec}`);
+
+		const pairCount = Math.min(MAX_PEAK_PAIRS, Math.max(1, Math.ceil(duration * PEAKS_PER_SECOND)));
+		const peaks = new Float32Array(pairCount * 2);
+		let decodeError: Error | null = null;
+		decoder = new AudioDecoder({
+			output: (data) => {
+				try {
+					const planes = Array.from(
+						{ length: data.numberOfChannels },
+						() => new Float32Array(data.numberOfFrames),
+					);
+					for (let channel = 0; channel < planes.length; channel += 1) {
+						data.copyTo(planes[channel], { format: "f32-planar", planeIndex: channel });
+					}
+
+					const startSec = data.timestamp / 1_000_000;
+					for (let frame = 0; frame < data.numberOfFrames; frame += 1) {
+						let sample = 0;
+						for (const plane of planes) sample += plane[frame] ?? 0;
+						sample /= Math.max(1, planes.length);
+						const timeSec = startSec + frame / data.sampleRate;
+						const bin = Math.min(
+							pairCount - 1,
+							Math.max(0, Math.floor((timeSec / duration) * pairCount)),
+						);
+						const index = bin * 2;
+						if (sample < peaks[index]) peaks[index] = sample;
+						if (sample > peaks[index + 1]) peaks[index + 1] = sample;
+					}
+				} catch (error) {
+					decodeError = error instanceof Error ? error : new Error(String(error));
+				} finally {
+					data.close();
+				}
+			},
+			error: (error) => {
+				decodeError = new Error(`AudioDecoder error: ${error.message}`);
+			},
+		});
+		decoder.configure(decoderConfig);
+
+		const reader = demuxer.read("audio", 0, duration + 0.5).getReader();
+		try {
+			while (!signal.aborted && !decodeError) {
+				const { done, value } = await reader.read();
+				if (done || !value) break;
+				decoder.decode(value);
+				while (decoder.decodeQueueSize > DECODE_BACKPRESSURE_LIMIT && !signal.aborted) {
+					await new Promise((resolve) => setTimeout(resolve, 1));
+				}
+			}
+		} finally {
+			await reader.cancel().catch(() => undefined);
+		}
+
+		if (signal.aborted) throw new DOMException("Aborted", "AbortError");
+		if (decodeError) throw decodeError;
+		await decoder.flush();
+		if (decodeError) throw decodeError;
+		return peaks;
+	} finally {
+		if (decoder?.state === "configured") decoder.close();
+		demuxer.destroy();
+	}
 }
 
 /**
- * Decodes audio from `videoUrl` into paired [min, max] peaks (length = 2 * N
- * blocks). Returns `null` while decoding, and stays `null` on no audio track or
- * decode failure (silent degradation). Results are cached in a ref scoped to the
- * hook instance, so they survive re-renders and waveform toggles but not unmount.
+ * Returns paired [min, max] waveform peaks. The cache stores only the compact
+ * peak array; source packets and decoded AudioData are released as they pass.
  */
 export function useAudioPeaks(videoUrl?: string): Float32Array | null {
 	const cacheRef = useRef<Map<string, Float32Array>>(new Map());
@@ -83,33 +132,20 @@ export function useAudioPeaks(videoUrl?: string): Float32Array | null {
 		}
 
 		setPeaks(null);
-		let cancelled = false;
 		const controller = new AbortController();
+		void computeAudioPeaks(videoUrl, controller.signal)
+			.then((nextPeaks) => {
+				if (controller.signal.aborted) return;
+				cacheRef.current.set(videoUrl, nextPeaks);
+				setPeaks(nextPeaks);
+			})
+			.catch((error) => {
+				if (error instanceof DOMException && error.name === "AbortError") return;
+				console.warn("useAudioPeaks: could not decode audio for waveform:", error);
+				if (!controller.signal.aborted) setPeaks(null);
+			});
 
-		(async () => {
-			try {
-				const { data: arrayBuffer } = await loadFileAsArrayBuffer(videoUrl);
-				if (cancelled) return;
-				const audioBuffer = await getAudioCtx().decodeAudioData(arrayBuffer);
-				if (cancelled) return;
-				const p = await computePeaksInWorker(audioBuffer, controller.signal);
-				if (cancelled) return;
-				cacheRef.current.set(videoUrl, p);
-				setPeaks(p);
-			} catch (err) {
-				// AbortError means the effect cleaned up, so no state update needed.
-				if (err instanceof DOMException && err.name === "AbortError") return;
-				// No audio track or unsupported format: degrade to no waveform, but log
-				// so an unexpectedly-missing waveform is diagnosable.
-				console.warn("useAudioPeaks: could not decode audio for waveform:", err);
-				if (!cancelled) setPeaks(null);
-			}
-		})();
-
-		return () => {
-			cancelled = true;
-			controller.abort();
-		};
+		return () => controller.abort();
 	}, [videoUrl]);
 
 	return peaks;

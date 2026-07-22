@@ -382,6 +382,16 @@ export interface SpeedRegion {
 	speed: PlaybackSpeed;
 }
 
+export interface InvertLayoutRegion {
+	id: string;
+	startMs: number;
+	endMs: number;
+}
+
+export function isInvertLayoutActive(regions: InvertLayoutRegion[], timeMs: number): boolean {
+	return regions.some((region) => timeMs >= region.startMs && timeMs < region.endMs);
+}
+
 export const SPEED_OPTIONS: Array<{ speed: PlaybackSpeed; label: string }> = [
 	{ speed: 0.25, label: "0.25×" },
 	{ speed: 0.5, label: "0.5×" },

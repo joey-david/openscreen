@@ -18,6 +18,7 @@ export interface ExportProgress {
 export interface ExportResult {
 	success: boolean;
 	blob?: Blob;
+	savedToPath?: string;
 	error?: string;
 	warnings?: string[];
 }

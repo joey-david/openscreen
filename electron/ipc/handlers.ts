@@ -41,6 +41,7 @@ import { createCursorRecordingSession } from "../native-bridge/cursor/recording/
 import { requestMacCursorAccessibilityAccess } from "../native-bridge/cursor/recording/macNativeCursorRecordingSession";
 import type { CursorRecordingSession } from "../native-bridge/cursor/recording/session";
 import { patchWebmDurationOnDisk } from "../recording/webm-duration";
+import { ExportStreamRegistry, registerExportStreamHandlers } from "./exportStream";
 import { registerNativeBridgeHandlers } from "./nativeBridge";
 import { RecordingStreamRegistry, registerRecordingStreamHandlers } from "./recordingStream";
 
@@ -64,9 +65,17 @@ const nativeMacCaptureEvents = new EventEmitter();
 
 // Paths the user approved via file picker or project load (i.e. outside the default dirs).
 const approvedPaths = new Set<string>();
+const approvedExportPaths = new Set<string>();
 
 function approveFilePath(filePath: string): void {
 	approvedPaths.add(path.resolve(filePath));
+}
+
+function resolveApprovedMp4ExportPath(filePath: string): string | null {
+	if (typeof filePath !== "string" || !path.isAbsolute(filePath)) return null;
+	const normalized = path.normalize(filePath);
+	if (!normalized.toLowerCase().endsWith(".mp4")) return null;
+	return approvedExportPaths.has(normalized) ? normalized : null;
 }
 
 function getAllowedReadDirs(): string[] {
@@ -288,6 +297,11 @@ async function finalizeRecordingFile(
 	const streamed = await registry.finalize(fileName);
 	if (!streamed && videoData && videoData.byteLength > 0) {
 		await fs.writeFile(filePath, Buffer.from(videoData));
+	} else if (!streamed) {
+		// Native capture already wrote this file. An empty payload lets the shared
+		// session path attach a streamed webcam without reading the screen video
+		// through IPC and writing it back unchanged.
+		await fs.access(filePath, fsConstants.R_OK);
 	}
 	return streamed;
 }
@@ -2199,6 +2213,10 @@ export function registerIpcHandlers(
 	// Chunks append as they arrive so the renderer never buffers the full video (#616).
 	const recordingStreams = new RecordingStreamRegistry();
 	registerRecordingStreamHandlers(ipcMain, recordingStreams, resolveRecordingOutputPath);
+	const exportStreams = new ExportStreamRegistry();
+	registerExportStreamHandlers(ipcMain, exportStreams, resolveApprovedMp4ExportPath, (filePath) =>
+		approveReadableVideoPath(filePath),
+	);
 
 	ipcMain.handle("store-recorded-session", async (_, payload: StoreRecordedSessionInput) => {
 		try {
@@ -2405,7 +2423,9 @@ export function registerIpcHandlers(
 				return { success: false, canceled: true, message: "Export canceled" };
 			}
 
-			return { success: true, path: path.normalize(result.filePath) };
+			const normalizedPath = path.normalize(result.filePath);
+			approvedExportPaths.add(normalizedPath);
+			return { success: true, path: normalizedPath };
 		} catch (error) {
 			console.error("Failed to show save dialog:", error);
 			return {

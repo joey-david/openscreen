@@ -442,9 +442,10 @@ export class StreamingVideoDecoder {
 					const { done, value: chunk } = await reader.read();
 					if (done || !chunk) break;
 
-					// Backpressure on both decode queue and decoded frame backlog.
+					// A few decoded frames keep the pipeline busy. Larger raw-frame queues
+					// can consume hundreds of MiB at 4K/5K with no throughput gain.
 					while (
-						(this.decoder!.decodeQueueSize > 10 || pendingFrames.length > 24) &&
+						(this.decoder!.decodeQueueSize > 6 || pendingFrames.length > 4) &&
 						!this.cancelled
 					) {
 						await new Promise((resolve) => setTimeout(resolve, 1));

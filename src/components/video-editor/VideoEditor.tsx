@@ -193,6 +193,7 @@ export default function VideoEditor() {
 		autoFocusAll,
 		trimRegions,
 		speedRegions,
+		invertLayoutRegions,
 		annotationRegions,
 		cropRegion,
 		wallpaper,
@@ -412,6 +413,7 @@ export default function VideoEditor() {
 				autoFocusAll: normalizedEditor.autoFocusAll,
 				trimRegions: normalizedEditor.trimRegions,
 				speedRegions: normalizedEditor.speedRegions,
+				invertLayoutRegions: normalizedEditor.invertLayoutRegions,
 				annotationRegions: normalizedEditor.annotationRegions,
 				aspectRatio: normalizedEditor.aspectRatio,
 				webcamLayoutPreset: normalizedEditor.webcamLayoutPreset,
@@ -489,6 +491,7 @@ export default function VideoEditor() {
 			autoFocusAll,
 			trimRegions,
 			speedRegions,
+			invertLayoutRegions,
 			annotationRegions,
 			aspectRatio,
 			webcamLayoutPreset,
@@ -520,6 +523,7 @@ export default function VideoEditor() {
 		autoFocusAll,
 		trimRegions,
 		speedRegions,
+		invertLayoutRegions,
 		annotationRegions,
 		aspectRatio,
 		webcamLayoutPreset,
@@ -648,6 +652,7 @@ export default function VideoEditor() {
 				autoFocusAll,
 				trimRegions,
 				speedRegions,
+				invertLayoutRegions,
 				annotationRegions,
 				aspectRatio,
 				webcamLayoutPreset,
@@ -713,6 +718,7 @@ export default function VideoEditor() {
 			autoFocusAll,
 			trimRegions,
 			speedRegions,
+			invertLayoutRegions,
 			annotationRegions,
 			aspectRatio,
 			webcamLayoutPreset,
@@ -1893,6 +1899,7 @@ export default function VideoEditor() {
 						zoomRegions,
 						trimRegions,
 						speedRegions,
+						invertLayoutRegions,
 						showShadow: shadowIntensity > 0,
 						shadowIntensity,
 						showBlur,
@@ -1964,6 +1971,11 @@ export default function VideoEditor() {
 					}
 				} else {
 					// MP4 Export
+					const supplementalAudioResult =
+						await window.electronAPI?.preparePreviewAudioTrack?.(videoPath);
+					const supplementalAudioUrl = supplementalAudioResult?.success
+						? (supplementalAudioResult.path ?? undefined)
+						: undefined;
 					const quality = settings.quality || exportQuality;
 					const {
 						width: exportWidth,
@@ -1978,6 +1990,10 @@ export default function VideoEditor() {
 
 					const exporter = new VideoExporter({
 						videoUrl: videoPath,
+						outputPath: targetPath,
+						sourceWidth,
+						sourceHeight,
+						supplementalAudioUrl,
 						webcamVideoUrl: webcamVideoPath || undefined,
 						width: exportWidth,
 						height: exportHeight,
@@ -1988,6 +2004,7 @@ export default function VideoEditor() {
 						zoomRegions,
 						trimRegions,
 						speedRegions,
+						invertLayoutRegions,
 						showShadow: shadowIntensity > 0,
 						shadowIntensity,
 						showBlur,
@@ -2021,7 +2038,13 @@ export default function VideoEditor() {
 					exporterRef.current = exporter;
 					const result = await exporter.export();
 
-					if (result.success && result.blob) {
+					if (result.success && result.savedToPath) {
+						if (result.warnings) {
+							for (const warning of result.warnings) toast.warning(warning);
+						}
+						setUnsavedExport(null);
+						handleExportSaved("Video", result.savedToPath);
+					} else if (result.success && result.blob) {
 						const arrayBuffer = await result.blob.arrayBuffer();
 
 						if (result.warnings) {
@@ -2096,6 +2119,7 @@ export default function VideoEditor() {
 			zoomRegions,
 			trimRegions,
 			speedRegions,
+			invertLayoutRegions,
 			shadowIntensity,
 			showBlur,
 			motionBlurAmount,
@@ -2622,6 +2646,7 @@ export default function VideoEditor() {
 													cursorRecordingData={cursorRecordingData}
 													trimRegions={trimRegions}
 													speedRegions={speedRegions}
+													invertLayoutRegions={invertLayoutRegions}
 													annotationRegions={annotationOnlyRegions}
 													selectedAnnotationId={selectedAnnotationId}
 													onSelectAnnotation={handleSelectAnnotation}

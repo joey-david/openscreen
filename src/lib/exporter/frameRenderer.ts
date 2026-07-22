@@ -11,6 +11,7 @@ import { MotionBlurFilter } from "pixi-filters/motion-blur";
 import type {
 	AnnotationRegion,
 	CropRegion,
+	InvertLayoutRegion,
 	Rotation3D,
 	SpeedRegion,
 	WebcamLayoutPreset,
@@ -20,6 +21,7 @@ import type {
 import {
 	DEFAULT_ROTATION_3D,
 	getZoomScale,
+	isInvertLayoutActive,
 	isRotation3DIdentity,
 	lerpRotation3D,
 } from "@/components/video-editor/types";
@@ -45,6 +47,7 @@ import {
 import {
 	computeCompositeLayout,
 	getWebcamLayoutPresetDefinition,
+	invertCompositeLayout,
 	reactiveWebcamScale,
 	type Size,
 	type StyledRenderRect,
@@ -103,6 +106,7 @@ interface FrameRenderConfig {
 	webcamPosition?: { cx: number; cy: number } | null;
 	annotationRegions?: AnnotationRegion[];
 	speedRegions?: SpeedRegion[];
+	invertLayoutRegions?: InvertLayoutRegion[];
 	previewWidth?: number;
 	previewHeight?: number;
 	cursorTelemetry?: import("@/components/video-editor/types").CursorTelemetryPoint[];
@@ -233,12 +237,14 @@ export class FrameRenderer {
 			throw new Error("Failed to get 2D context for composite canvas");
 		}
 
-		this.rasterCanvas = document.createElement("canvas");
-		this.rasterCanvas.width = this.config.width;
-		this.rasterCanvas.height = this.config.height;
-		this.rasterCtx = this.rasterCanvas.getContext("2d");
-		if (!this.rasterCtx) {
-			throw new Error("Failed to get 2D context for raster canvas");
+		if (this.isLinux) {
+			this.rasterCanvas = document.createElement("canvas");
+			this.rasterCanvas.width = this.config.width;
+			this.rasterCanvas.height = this.config.height;
+			this.rasterCtx = this.rasterCanvas.getContext("2d");
+			if (!this.rasterCtx) {
+				throw new Error("Failed to get 2D context for raster canvas");
+			}
 		}
 
 		// Foreground (transparent): recording + shadow + webcam + cursor + annotations.
@@ -270,11 +276,16 @@ export class FrameRenderer {
 		this.videoContainer.addChild(this.maskGraphics);
 		this.videoContainer.mask = this.maskGraphics;
 
-		try {
-			this.threeDPass = createThreeDPass(this.config.width, this.config.height);
-		} catch (error) {
-			console.warn("[FrameRenderer] 3D pass unavailable, rotation fields will be ignored:", error);
-			this.threeDPass = null;
+		if (this.config.zoomRegions.some((region) => Boolean(region.rotationPreset))) {
+			try {
+				this.threeDPass = createThreeDPass(this.config.width, this.config.height);
+			} catch (error) {
+				console.warn(
+					"[FrameRenderer] 3D pass unavailable, rotation fields will be ignored:",
+					error,
+				);
+				this.threeDPass = null;
+			}
 		}
 	}
 
@@ -394,9 +405,11 @@ export class FrameRenderer {
 			oldTexture.destroy(true);
 		}
 
-		this.updateLayout(webcamFrame);
-
 		const timeMs = this.currentVideoTime * 1000;
+		this.updateLayout(
+			webcamFrame,
+			isInvertLayoutActive(this.config.invertLayoutRegions ?? [], timeMs),
+		);
 		const TICKS_PER_FRAME = 1;
 
 		let maxMotionIntensity = 0;
@@ -669,7 +682,7 @@ export class FrameRenderer {
 		console.warn(`[FrameRenderer] ${message}:`, error);
 	}
 
-	private updateLayout(webcamFrame?: VideoFrame | null): void {
+	private updateLayout(webcamFrame?: VideoFrame | null, invertLayout = false): void {
 		if (!this.app || !this.videoSprite || !this.maskGraphics || !this.videoContainer) return;
 
 		const { width, height } = this.config;
@@ -702,12 +715,13 @@ export class FrameRenderer {
 			webcamMaskShape: this.config.webcamMaskShape,
 		});
 		if (!compositeLayout) return;
+		const effectiveLayout = invertLayout ? invertCompositeLayout(compositeLayout) : compositeLayout;
 
-		const screenRect = compositeLayout.screenRect;
+		const screenRect = effectiveLayout.screenRect;
 
 		// Cover mode scales to fill the rect (may crop), otherwise fit-to-width
 		let scale: number;
-		if (compositeLayout.screenCover) {
+		if (effectiveLayout.screenCover) {
 			scale = Math.max(
 				screenRect.width / croppedVideoWidth,
 				screenRect.height / croppedVideoHeight,
@@ -738,9 +752,9 @@ export class FrameRenderer {
 		const previewHeight = this.config.previewHeight ?? this.config.height;
 		const canvasScaleFactor = Math.min(width / previewWidth, height / previewHeight);
 		const scaledBorderRadius =
-			compositeLayout.screenBorderRadius != null
-				? compositeLayout.screenBorderRadius
-				: compositeLayout.screenCover
+			effectiveLayout.screenBorderRadius != null
+				? effectiveLayout.screenBorderRadius
+				: effectiveLayout.screenCover
 					? 0
 					: borderRadius * canvasScaleFactor;
 
@@ -757,12 +771,12 @@ export class FrameRenderer {
 			videoSize: { width: croppedVideoWidth, height: croppedVideoHeight },
 			baseScale: scale,
 			baseOffset: {
-				x: compositeLayout.screenRect.x + coverOffsetX - cropPixelX,
-				y: compositeLayout.screenRect.y + coverOffsetY - cropPixelY,
+				x: effectiveLayout.screenRect.x + coverOffsetX - cropPixelX,
+				y: effectiveLayout.screenRect.y + coverOffsetY - cropPixelY,
 			},
-			maskRect: compositeLayout.screenRect,
+			maskRect: effectiveLayout.screenRect,
 			maskBorderRadius: scaledBorderRadius,
-			webcamRect: compositeLayout.webcamRect,
+			webcamRect: effectiveLayout.webcamRect,
 		};
 	}
 

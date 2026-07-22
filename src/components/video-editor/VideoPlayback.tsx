@@ -60,6 +60,7 @@ import {
 	computeRotation3DContainScale,
 	DEFAULT_ROTATION_3D,
 	getZoomScale,
+	type InvertLayoutRegion,
 	isRotation3DIdentity,
 	lerpRotation3D,
 	rotation3DPerspective,
@@ -122,6 +123,7 @@ interface VideoPlaybackProps {
 	cropRegion?: import("./types").CropRegion;
 	trimRegions?: TrimRegion[];
 	speedRegions?: SpeedRegion[];
+	invertLayoutRegions?: InvertLayoutRegion[];
 	aspectRatio: AspectRatio;
 	cursorRecordingData?: CursorRecordingData | null;
 	annotationRegions?: AnnotationRegion[];
@@ -249,6 +251,7 @@ const VideoPlayback = forwardRef<VideoPlaybackRef, VideoPlaybackProps>(
 			cropRegion,
 			trimRegions = [],
 			speedRegions = [],
+			invertLayoutRegions = [],
 			aspectRatio,
 			cursorRecordingData,
 			annotationRegions = [],
@@ -343,6 +346,8 @@ const VideoPlayback = forwardRef<VideoPlaybackRef, VideoPlaybackProps>(
 		const layoutVideoContentRef = useRef<(() => void) | null>(null);
 		const trimRegionsRef = useRef<TrimRegion[]>([]);
 		const speedRegionsRef = useRef<SpeedRegion[]>([]);
+		const invertLayoutRegionsRef = useRef<InvertLayoutRegion[]>([]);
+		const invertLayoutActiveRef = useRef(false);
 		const motionBlurAmountRef = useRef(motionBlurAmount);
 		const cursorOverlayRef = useRef<PixiCursorOverlay | null>(null);
 		const showCursorRef = useRef(showCursor);
@@ -562,6 +567,10 @@ const VideoPlayback = forwardRef<VideoPlaybackRef, VideoPlaybackProps>(
 				webcamSizePreset,
 				webcamPosition,
 				webcamMaskShape,
+				invertLayout: invertLayoutRegionsRef.current.some(
+					(region) =>
+						currentTimeRef.current >= region.startMs && currentTimeRef.current < region.endMs,
+				),
 			});
 
 			if (result) {
@@ -797,6 +806,18 @@ const VideoPlayback = forwardRef<VideoPlaybackRef, VideoPlaybackProps>(
 		useEffect(() => {
 			speedRegionsRef.current = speedRegions;
 		}, [speedRegions]);
+
+		useEffect(() => {
+			invertLayoutRegionsRef.current = invertLayoutRegions ?? [];
+			const active = invertLayoutRegionsRef.current.some(
+				(region) =>
+					currentTimeRef.current >= region.startMs && currentTimeRef.current < region.endMs,
+			);
+			if (active !== invertLayoutActiveRef.current) {
+				invertLayoutActiveRef.current = active;
+				layoutVideoContentRef.current?.();
+			}
+		}, [invertLayoutRegions]);
 
 		useEffect(() => {
 			motionBlurAmountRef.current = motionBlurAmount;
@@ -1344,6 +1365,15 @@ const VideoPlayback = forwardRef<VideoPlaybackRef, VideoPlaybackProps>(
 			let lastTransformIsIdentity = true;
 			let lastPerspectiveValue = 0;
 			const ticker = () => {
+				const invertLayoutActive = invertLayoutRegionsRef.current.some(
+					(region) =>
+						currentTimeRef.current >= region.startMs && currentTimeRef.current < region.endMs,
+				);
+				if (invertLayoutActive !== invertLayoutActiveRef.current) {
+					invertLayoutActiveRef.current = invertLayoutActive;
+					layoutVideoContentRef.current?.();
+				}
+
 				const { region, strength, blendedScale, rotation3D, transition } = findDominantRegion(
 					zoomRegionsRef.current,
 					currentTimeRef.current,

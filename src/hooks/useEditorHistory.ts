@@ -7,6 +7,7 @@ import {
 import type {
 	AnnotationRegion,
 	CropRegion,
+	InvertLayoutRegion,
 	SpeedRegion,
 	TrimRegion,
 	WebcamLayoutPreset,
@@ -33,6 +34,7 @@ export interface EditorState {
 	autoFocusAll: boolean;
 	trimRegions: TrimRegion[];
 	speedRegions: SpeedRegion[];
+	invertLayoutRegions: InvertLayoutRegion[];
 	annotationRegions: AnnotationRegion[];
 	cropRegion: CropRegion;
 	wallpaper: string;
@@ -57,6 +59,7 @@ export const INITIAL_EDITOR_STATE: EditorState = {
 	autoFocusAll: false,
 	trimRegions: [],
 	speedRegions: [],
+	invertLayoutRegions: [],
 	annotationRegions: [],
 	cropRegion: DEFAULT_CROP_REGION,
 	wallpaper: DEFAULT_EDITOR_LAYOUT_SETTINGS.wallpaper,

@@ -191,6 +191,20 @@ interface Window {
 			message?: string;
 			error?: string;
 		}>;
+		openExportStream?: (filePath: string) => Promise<{ success: boolean; error?: string }>;
+		writeExportChunk?: (
+			filePath: string,
+			data: Uint8Array,
+			position: number,
+		) => Promise<{ success: boolean; error?: string }>;
+		closeExportStream?: (
+			filePath: string,
+			discard?: boolean,
+		) => Promise<{ success: boolean; error?: string }>;
+		copyExportSource?: (
+			sourcePath: string,
+			filePath: string,
+		) => Promise<{ success: boolean; error?: string }>;
 		openVideoFilePicker: () => Promise<{ success: boolean; path?: string; canceled?: boolean }>;
 		setCurrentVideoPath: (path: string) => Promise<{ success: boolean }>;
 		setCurrentRecordingSession: (

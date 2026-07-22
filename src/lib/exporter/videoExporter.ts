@@ -1,6 +1,7 @@
 import type {
 	AnnotationRegion,
 	CropRegion,
+	InvertLayoutRegion,
 	SpeedRegion,
 	TrimRegion,
 	WebcamLayoutPreset,
@@ -22,11 +23,18 @@ const ENCODER_FLUSH_TIMEOUT_MS = 20_000;
 
 export interface VideoExporterConfig extends ExportConfig {
 	videoUrl: string;
+	/** Optional direct MP4 target. Browser callers can omit it and receive a Blob. */
+	outputPath?: string;
+	/** Known source size lets unchanged local MP4s skip decoder startup entirely. */
+	sourceWidth?: number;
+	sourceHeight?: number;
+	supplementalAudioUrl?: string;
 	webcamVideoUrl?: string;
 	wallpaper: string;
 	zoomRegions: ZoomRegion[];
 	trimRegions?: TrimRegion[];
 	speedRegions?: SpeedRegion[];
+	invertLayoutRegions?: InvertLayoutRegion[];
 	showShadow: boolean;
 	shadowIntensity: number;
 	showBlur: boolean;
@@ -104,8 +112,12 @@ export function getSourceCopyFastPathBlockers(
 		);
 	}
 	if (config.webcamVideoUrl) blockers.push("webcam overlay is enabled");
+	if (config.supplementalAudioUrl) blockers.push("a supplemental audio track is required");
 	if (hasActiveTimeRegions(config.trimRegions)) blockers.push("trim regions are present");
 	if (hasActiveSpeedRegions(config.speedRegions)) blockers.push("speed regions are present");
+	if (hasActiveTimeRegions(config.invertLayoutRegions)) {
+		blockers.push("layout inversion regions are present");
+	}
 	if (hasActiveTimeRegions(config.zoomRegions)) blockers.push("zoom regions are present");
 	if (hasActiveTimeRegions(config.annotationRegions))
 		blockers.push("annotation regions are present");
@@ -145,12 +157,13 @@ export class VideoExporter {
 	private audioProcessor: AudioProcessor | null = null;
 	private webcamDecoder: StreamingVideoDecoder | null = null;
 	private cancelled = false;
-	private encodeQueue = 0;
-	// Keep a smaller queue for software encoding so Windows does not balloon memory.
-	private readonly MAX_ENCODE_QUEUE = 120;
+	private readonly MAX_HARDWARE_ENCODE_QUEUE = 8;
+	private readonly MAX_SOFTWARE_ENCODE_QUEUE = 4;
 	private videoDescription: Uint8Array | undefined;
 	private videoColorSpace: VideoColorSpaceInit | undefined;
-	private muxingPromises: Promise<void>[] = [];
+	private muxingChain: Promise<void> = Promise.resolve();
+	private muxingError: Error | null = null;
+	private pendingMuxChunks = 0;
 	private chunkCount = 0;
 	private lastEncoderOutputAt = 0;
 	private fatalEncoderError: Error | null = null;
@@ -185,7 +198,7 @@ export class VideoExporter {
 					);
 				}
 			} finally {
-				this.cleanup();
+				await this.cleanup();
 			}
 		}
 
@@ -206,12 +219,19 @@ export class VideoExporter {
 		const warnings: string[] = [];
 		const onWarning = (message: string) => warnings.push(message);
 
-		this.cleanup();
+		await this.cleanup();
 		this.cancelled = false;
 		this.fatalEncoderError = null;
 
 		try {
 			const platform = await getPlatform();
+			if (this.config.sourceWidth && this.config.sourceHeight) {
+				const sourceCopyResult = await this.trySourceCopyFastPath({
+					width: this.config.sourceWidth,
+					height: this.config.sourceHeight,
+				});
+				if (sourceCopyResult) return sourceCopyResult;
+			}
 
 			const streamingDecoder = new StreamingVideoDecoder();
 			this.streamingDecoder = streamingDecoder;
@@ -258,6 +278,7 @@ export class VideoExporter {
 				webcamPosition: this.config.webcamPosition,
 				annotationRegions: this.config.annotationRegions,
 				speedRegions: this.config.speedRegions,
+				invertLayoutRegions: this.config.invertLayoutRegions,
 				previewWidth: this.config.previewWidth,
 				previewHeight: this.config.previewHeight,
 				cursorTelemetry: this.config.cursorTelemetry,
@@ -279,7 +300,12 @@ export class VideoExporter {
 			}
 
 			const hasAudio = Boolean(audioExportCodec);
-			const muxer = new VideoMuxer(this.config, hasAudio, audioExportCodec?.muxerCodec);
+			const muxer = new VideoMuxer(
+				this.config,
+				hasAudio,
+				audioExportCodec?.muxerCodec,
+				this.config.outputPath,
+			);
 			this.muxer = muxer;
 			await muxer.initialize();
 
@@ -293,8 +319,8 @@ export class VideoExporter {
 			let frameIndex = 0;
 			const maxEncodeQueue =
 				encoderPreference === "prefer-software"
-					? Math.min(this.MAX_ENCODE_QUEUE, 32)
-					: this.MAX_ENCODE_QUEUE;
+					? this.MAX_SOFTWARE_ENCODE_QUEUE
+					: this.MAX_HARDWARE_ENCODE_QUEUE;
 
 			webcamFrameQueue = this.config.webcamVideoUrl ? new TimestampedVideoFrameQueue() : null;
 			webcamDecodePromise =
@@ -307,7 +333,7 @@ export class VideoExporter {
 									this.config.trimRegions,
 									this.config.speedRegions,
 									async (webcamFrame, _exportTimestampUs, webcamSourceTimestampMs) => {
-										while (queue.length >= 12 && !this.cancelled && !stopWebcamDecode) {
+										while (queue.length >= 3 && !this.cancelled && !stopWebcamDecode) {
 											await new Promise((resolve) => setTimeout(resolve, 2));
 										}
 										if (this.cancelled || stopWebcamDecode) {
@@ -386,7 +412,7 @@ export class VideoExporter {
 
 						while (
 							this.encoder &&
-							this.encoder.encodeQueueSize >= maxEncodeQueue &&
+							(this.encoder.encodeQueueSize >= maxEncodeQueue || this.pendingMuxChunks >= 8) &&
 							!this.cancelled
 						) {
 							if (Date.now() - this.lastEncoderOutputAt > ENCODER_STALL_TIMEOUT_MS) {
@@ -401,7 +427,6 @@ export class VideoExporter {
 						}
 
 						if (this.encoder && this.encoder.state === "configured") {
-							this.encodeQueue++;
 							this.encoder.encode(exportFrame, { keyFrame: frameIndex % 150 === 0 });
 						} else {
 							console.warn(
@@ -453,7 +478,8 @@ export class VideoExporter {
 				throw this.fatalEncoderError;
 			}
 
-			await Promise.all(this.muxingPromises);
+			await this.muxingChain;
+			if (this.muxingError) throw this.muxingError;
 
 			this.reportProgress({
 				currentFrame: totalFrames,
@@ -476,12 +502,17 @@ export class VideoExporter {
 						this.config.speedRegions,
 						videoInfo.duration,
 						audioExportCodec,
+						this.config.supplementalAudioUrl,
 					);
 				}
 			}
 
 			const blob = await muxer.finalize();
-			return { success: true, blob, warnings: warnings.length > 0 ? warnings : undefined };
+			return {
+				success: true,
+				...(blob ? { blob } : { savedToPath: this.config.outputPath }),
+				warnings: warnings.length > 0 ? warnings : undefined,
+			};
 		} finally {
 			stopWebcamDecode = true;
 			webcamFrameQueue?.destroy();
@@ -493,8 +524,9 @@ export class VideoExporter {
 	}
 
 	private async initializeEncoder(hardwareAcceleration: HardwareAcceleration): Promise<void> {
-		this.encodeQueue = 0;
-		this.muxingPromises = [];
+		this.muxingChain = Promise.resolve();
+		this.muxingError = null;
+		this.pendingMuxChunks = 0;
 		this.chunkCount = 0;
 		this.lastEncoderOutputAt = Date.now();
 		this.fatalEncoderError = null;
@@ -520,9 +552,10 @@ export class VideoExporter {
 
 				const isFirstChunk = this.chunkCount === 0;
 				this.chunkCount++;
+				this.pendingMuxChunks += 1;
 
-				const muxingPromise = (async () => {
-					try {
+				this.muxingChain = this.muxingChain
+					.then(async () => {
 						if (isFirstChunk && this.videoDescription) {
 							const colorSpace = this.videoColorSpace || {
 								primaries: "bt709",
@@ -545,13 +578,15 @@ export class VideoExporter {
 						} else {
 							await this.muxer!.addVideoChunk(chunk, meta);
 						}
-					} catch (error) {
-						console.error("Muxing error:", error);
-					}
-				})();
-
-				this.muxingPromises.push(muxingPromise);
-				this.encodeQueue = Math.max(0, this.encodeQueue - 1);
+					})
+					.finally(() => {
+						this.pendingMuxChunks = Math.max(0, this.pendingMuxChunks - 1);
+					});
+				void this.muxingChain.catch((error) => {
+					this.muxingError = error instanceof Error ? error : new Error(String(error));
+					this.streamingDecoder?.cancel();
+					this.webcamDecoder?.cancel();
+				});
 			},
 			error: (error) => {
 				console.error("[VideoExporter] Encoder error:", error);
@@ -599,10 +634,10 @@ export class VideoExporter {
 		if (this.audioProcessor) {
 			this.audioProcessor.cancel();
 		}
-		this.cleanup();
+		void this.cleanup();
 	}
 
-	private cleanup(): void {
+	private async cleanup(): Promise<void> {
 		if (this.encoder) {
 			try {
 				if (this.encoder.state === "configured") {
@@ -642,9 +677,13 @@ export class VideoExporter {
 		}
 
 		this.audioProcessor = null;
-		this.muxer = null;
-		this.encodeQueue = 0;
-		this.muxingPromises = [];
+		if (this.muxer) {
+			await this.muxer.cancel().catch(() => undefined);
+			this.muxer = null;
+		}
+		this.muxingChain = Promise.resolve();
+		this.muxingError = null;
+		this.pendingMuxChunks = 0;
 		this.chunkCount = 0;
 		this.videoDescription = undefined;
 		this.videoColorSpace = undefined;
@@ -668,6 +707,28 @@ export class VideoExporter {
 				source: videoInfo,
 			});
 			return null;
+		}
+
+		if (
+			this.config.outputPath &&
+			window.electronAPI?.copyExportSource &&
+			isMp4Source(this.config.videoUrl, new Blob())
+		) {
+			const copied = await window.electronAPI.copyExportSource(
+				this.config.videoUrl,
+				this.config.outputPath,
+			);
+			if (copied.success) {
+				this.reportProgress({
+					currentFrame: 1,
+					totalFrames: 1,
+					percentage: 100,
+					estimatedTimeRemaining: 0,
+					phase: "finalizing",
+				});
+				return { success: true, savedToPath: this.config.outputPath } satisfies ExportResult;
+			}
+			console.warn("[VideoExporter] direct source copy failed, using blob fallback:", copied.error);
 		}
 
 		const sourceBlob = await this.loadSourceBlob();

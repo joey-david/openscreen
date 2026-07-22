@@ -11,12 +11,11 @@ import {
 	type NativeWindowsRecordingRequest,
 	parseWindowHandleFromSourceId,
 } from "@/lib/nativeWindowsRecording";
-import type { CursorCaptureMode, RecordedVideoAssetInput } from "@/lib/recordingSession";
+import type { CursorCaptureMode } from "@/lib/recordingSession";
 import { requestCameraAccess } from "@/lib/requestCameraAccess";
 import { createRecorderHandle, type RecorderHandle } from "./recorderHandle";
 
 const TARGET_FRAME_RATE = 60;
-const MIN_FRAME_RATE = 30;
 const TARGET_WIDTH = 3840;
 const TARGET_HEIGHT = 2160;
 const FOUR_K_PIXELS = TARGET_WIDTH * TARGET_HEIGHT;
@@ -428,6 +427,7 @@ export function useScreenRecorder(): UseScreenRecorderReturn {
 			activeNativeRecording.finalizing = true;
 			const activeWebcamRecorder = activeNativeRecording.webcamRecorder;
 			const duration = Math.max(0, getRecordingDurationMs());
+			let webcamStored = false;
 			if (
 				activeWebcamRecorder?.recorder.state === "recording" ||
 				activeWebcamRecorder?.recorder.state === "paused"
@@ -468,20 +468,26 @@ export function useScreenRecorder(): UseScreenRecorderReturn {
 				let storedSession = result.session;
 				if (activeWebcamRecorder && nativeScreenPath) {
 					const webcamBlob = await activeWebcamRecorder.recordedBlobPromise.catch(() => null);
-					const screenRead = await window.electronAPI.readBinaryFile(nativeScreenPath);
-					if (webcamBlob && webcamBlob.size > 0 && screenRead.success && screenRead.data) {
+					let webcamVideoData: ArrayBuffer | undefined;
+					if (activeWebcamRecorder.isStreaming()) {
+						webcamVideoData = new ArrayBuffer(0);
+					} else if (webcamBlob && webcamBlob.size > 0) {
 						const fixedWebcamBlob = await fixWebmDuration(webcamBlob, duration);
+						webcamVideoData = await fixedWebcamBlob.arrayBuffer();
+					}
+
+					if (webcamVideoData !== undefined) {
 						const nativeScreenFileName =
 							nativeScreenPath.split(/[\\/]/).pop() ??
 							`${RECORDING_FILE_PREFIX}${activeNativeRecording.recordingId}.mp4`;
 						const webcamFileName = `${RECORDING_FILE_PREFIX}${activeNativeRecording.recordingId}${WEBCAM_FILE_SUFFIX}${VIDEO_FILE_EXTENSION}`;
 						const stored = await window.electronAPI.storeRecordedSession({
 							screen: {
-								videoData: screenRead.data,
+								videoData: new ArrayBuffer(0),
 								fileName: nativeScreenFileName,
 							},
 							webcam: {
-								videoData: await fixedWebcamBlob.arrayBuffer(),
+								videoData: webcamVideoData,
 								fileName: webcamFileName,
 							},
 							createdAt: activeNativeRecording.recordingId,
@@ -489,6 +495,7 @@ export function useScreenRecorder(): UseScreenRecorderReturn {
 						});
 						if (stored.success && stored.session) {
 							storedSession = stored.session;
+							webcamStored = true;
 						}
 					}
 				}
@@ -510,6 +517,9 @@ export function useScreenRecorder(): UseScreenRecorderReturn {
 				activeNativeRecording.finalizing = false;
 				return true;
 			} finally {
+				if (activeWebcamRecorder && !webcamStored) {
+					await activeWebcamRecorder.discard().catch(() => undefined);
+				}
 				if (discardRecordingId.current === activeNativeRecording.recordingId) {
 					discardRecordingId.current = null;
 				}
@@ -528,10 +538,11 @@ export function useScreenRecorder(): UseScreenRecorderReturn {
 			activeNativeRecording.finalizing = true;
 			const duration = Math.max(0, getRecordingDurationMs());
 			const activeWebcamRecorder = webcamRecorder.current;
+			let webcamStored = false;
 			if (activeWebcamRecorder && webcamRecorder.current === activeWebcamRecorder) {
 				webcamRecorder.current = null;
 			}
-			const webcamAssetPromise = (async (): Promise<RecordedVideoAssetInput | undefined> => {
+			const webcamDataPromise = (async (): Promise<ArrayBuffer | undefined> => {
 				if (!activeWebcamRecorder) {
 					return undefined;
 				}
@@ -541,14 +552,12 @@ export function useScreenRecorder(): UseScreenRecorderReturn {
 						activeWebcamRecorder.recorder.stop();
 					}
 					const webcamBlob = await activeWebcamRecorder.recordedBlobPromise;
-					if (!webcamBlob || webcamBlob.size === 0) {
-						return undefined;
+					if (activeWebcamRecorder.isStreaming()) {
+						return new ArrayBuffer(0);
 					}
+					if (!webcamBlob || webcamBlob.size === 0) return undefined;
 					const fixedWebcamBlob = await fixWebmDuration(webcamBlob, duration);
-					return {
-						videoData: await fixedWebcamBlob.arrayBuffer(),
-						fileName: `${RECORDING_FILE_PREFIX}${activeNativeRecording.recordingId}${WEBCAM_FILE_SUFFIX}${VIDEO_FILE_EXTENSION}`,
-					};
+					return fixedWebcamBlob.arrayBuffer();
 				} catch (error) {
 					console.error("Failed to finalize native macOS webcam recording:", error);
 					return undefined;
@@ -566,7 +575,7 @@ export function useScreenRecorder(): UseScreenRecorderReturn {
 
 			try {
 				const result = await window.electronAPI.stopNativeMacRecording(discard);
-				const webcamAsset = await webcamAssetPromise;
+				const webcamVideoData = await webcamDataPromise;
 				if (discard || result.discarded) {
 					clearNativeRecordingState();
 					return true;
@@ -578,18 +587,23 @@ export function useScreenRecorder(): UseScreenRecorderReturn {
 					return true;
 				}
 
-				if (webcamAsset && result.path) {
-					const attachResult = await window.electronAPI.attachNativeMacWebcamRecording({
-						screenVideoPath: result.path,
-						recordingId: activeNativeRecording.recordingId,
-						webcam: webcamAsset,
+				if (webcamVideoData !== undefined && result.path) {
+					const screenFileName =
+						result.path.split(/[\\/]/).pop() ??
+						`${RECORDING_FILE_PREFIX}${activeNativeRecording.recordingId}.mp4`;
+					const webcamFileName = `${RECORDING_FILE_PREFIX}${activeNativeRecording.recordingId}${WEBCAM_FILE_SUFFIX}${VIDEO_FILE_EXTENSION}`;
+					const stored = await window.electronAPI.storeRecordedSession({
+						screen: { fileName: screenFileName, videoData: new ArrayBuffer(0) },
+						webcam: { fileName: webcamFileName, videoData: webcamVideoData },
+						createdAt: activeNativeRecording.recordingId,
 						cursorCaptureMode,
 					});
-					if (attachResult.success) {
-						result.session = attachResult.session;
+					if (stored.success) {
+						result.session = stored.session;
+						webcamStored = true;
 					} else {
-						console.error("Failed to attach native macOS webcam recording:", attachResult.error);
-						toast.error(attachResult.error ?? "Failed to store webcam recording");
+						console.error("Failed to attach native macOS webcam recording:", stored.error);
+						toast.error(stored.error ?? "Failed to store webcam recording");
 					}
 				}
 
@@ -610,6 +624,9 @@ export function useScreenRecorder(): UseScreenRecorderReturn {
 				activeNativeRecording.finalizing = false;
 				return true;
 			} finally {
+				if (activeWebcamRecorder && !webcamStored) {
+					await activeWebcamRecorder.discard().catch(() => undefined);
+				}
 				if (discardRecordingId.current === activeNativeRecording.recordingId) {
 					discardRecordingId.current = null;
 				}
@@ -817,10 +834,14 @@ export function useScreenRecorder(): UseScreenRecorderReturn {
 			}
 			const browserWebcamRecorder =
 				webcamEnabled && webcamStream.current
-					? createRecorderHandle(webcamStream.current, {
-							mimeType: selectMimeType(),
-							videoBitsPerSecond: BITRATE_BASE,
-						})
+					? createRecorderHandle(
+							webcamStream.current,
+							{
+								mimeType: selectMimeType(),
+								videoBitsPerSecond: BITRATE_BASE,
+							},
+							`${RECORDING_FILE_PREFIX}${activeRecordingId}${WEBCAM_FILE_SUFFIX}${VIDEO_FILE_EXTENSION}`,
+						)
 					: null;
 			if (webcamEnabled && !browserWebcamRecorder) {
 				stopWebcamPreviewStream();
@@ -945,10 +966,14 @@ export function useScreenRecorder(): UseScreenRecorderReturn {
 					return true;
 				}
 				if (webcamStream.current) {
-					nativeWebcamRecorder = createRecorderHandle(webcamStream.current, {
-						mimeType: selectMimeType(),
-						videoBitsPerSecond: BITRATE_BASE,
-					});
+					nativeWebcamRecorder = createRecorderHandle(
+						webcamStream.current,
+						{
+							mimeType: selectMimeType(),
+							videoBitsPerSecond: BITRATE_BASE,
+						},
+						`${RECORDING_FILE_PREFIX}${activeRecordingId}${WEBCAM_FILE_SUFFIX}${VIDEO_FILE_EXTENSION}`,
+					);
 				} else {
 					webcamAcquireId.current++;
 					setWebcamEnabledState(false);
@@ -1161,8 +1186,6 @@ export function useScreenRecorder(): UseScreenRecorderReturn {
 				screenMediaStream = await navigator.mediaDevices.getDisplayMedia({
 					video: {
 						cursor: cursorCaptureMode === "editable-overlay" ? "never" : "always",
-						width: { max: TARGET_WIDTH },
-						height: { max: TARGET_HEIGHT },
 						frameRate: { ideal: TARGET_FRAME_RATE },
 					} as MediaTrackConstraints,
 					audio: systemAudioEnabled,
@@ -1172,10 +1195,7 @@ export function useScreenRecorder(): UseScreenRecorderReturn {
 					mandatory: {
 						chromeMediaSource: CHROME_MEDIA_SOURCE,
 						chromeMediaSourceId: selectedSource.id,
-						maxWidth: TARGET_WIDTH,
-						maxHeight: TARGET_HEIGHT,
 						maxFrameRate: TARGET_FRAME_RATE,
-						minFrameRate: MIN_FRAME_RATE,
 					},
 				};
 
@@ -1297,12 +1317,10 @@ export function useScreenRecorder(): UseScreenRecorderReturn {
 			try {
 				await videoTrack.applyConstraints({
 					frameRate: { ideal: TARGET_FRAME_RATE, max: TARGET_FRAME_RATE },
-					width: { ideal: TARGET_WIDTH, max: TARGET_WIDTH },
-					height: { ideal: TARGET_HEIGHT, max: TARGET_HEIGHT },
 				});
 			} catch (constraintError) {
 				console.warn(
-					"Unable to lock 4K/60fps constraints, using best available track settings.",
+					"Unable to apply the target frame rate, using the source track settings.",
 					constraintError,
 				);
 			}

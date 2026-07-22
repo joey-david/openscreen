@@ -30,6 +30,7 @@ import {
 	DEFAULT_WEBCAM_REACTIVE_ZOOM,
 	DEFAULT_ZOOM_DEPTH,
 	DEFAULT_ZOOM_MOTION_BLUR,
+	type InvertLayoutRegion,
 	MAX_BLUR_BLOCK_SIZE,
 	MAX_BLUR_INTENSITY,
 	MAX_PLAYBACK_SPEED,
@@ -78,6 +79,7 @@ export interface ProjectEditorState {
 	autoFocusAll: boolean;
 	trimRegions: TrimRegion[];
 	speedRegions: SpeedRegion[];
+	invertLayoutRegions: InvertLayoutRegion[];
 	annotationRegions: AnnotationRegion[];
 	aspectRatio: AspectRatio;
 	webcamLayoutPreset: WebcamLayoutPreset;
@@ -312,6 +314,22 @@ export function normalizeProjectEditor(editor: Partial<ProjectEditorState>): Pro
 				})
 		: [];
 
+	const normalizedInvertLayoutRegions: InvertLayoutRegion[] = Array.isArray(
+		editor.invertLayoutRegions,
+	)
+		? editor.invertLayoutRegions
+				.filter((region): region is InvertLayoutRegion =>
+					Boolean(region && typeof region.id === "string"),
+				)
+				.map((region) => {
+					const rawStart = isFiniteNumber(region.startMs) ? Math.round(region.startMs) : 0;
+					const rawEnd = isFiniteNumber(region.endMs) ? Math.round(region.endMs) : rawStart + 1000;
+					const startMs = Math.max(0, Math.min(rawStart, rawEnd));
+					const endMs = Math.max(startMs + 1, rawEnd);
+					return { id: region.id, startMs, endMs };
+				})
+		: [];
+
 	const normalizedAnnotationRegions: AnnotationRegion[] = Array.isArray(editor.annotationRegions)
 		? editor.annotationRegions
 				.filter((region): region is AnnotationRegion =>
@@ -490,6 +508,7 @@ export function normalizeProjectEditor(editor: Partial<ProjectEditorState>): Pro
 		autoFocusAll: typeof editor.autoFocusAll === "boolean" ? editor.autoFocusAll : false,
 		trimRegions: normalizedTrimRegions,
 		speedRegions: normalizedSpeedRegions,
+		invertLayoutRegions: normalizedInvertLayoutRegions,
 		annotationRegions: normalizedAnnotationRegions,
 		aspectRatio: normalizedAspectRatio,
 		webcamLayoutPreset: normalizedWebcamLayoutPreset,

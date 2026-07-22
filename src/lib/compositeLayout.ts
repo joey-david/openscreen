@@ -85,6 +85,31 @@ export interface WebcamCompositeLayout {
 	screenCover?: boolean;
 }
 
+/** Swap the screen and webcam slots while preserving the active layout geometry. */
+export function invertCompositeLayout(layout: WebcamCompositeLayout): WebcamCompositeLayout {
+	if (!layout.webcamRect) return layout;
+
+	return {
+		...layout,
+		screenRect: {
+			x: layout.webcamRect.x,
+			y: layout.webcamRect.y,
+			width: layout.webcamRect.width,
+			height: layout.webcamRect.height,
+		},
+		webcamRect: {
+			x: layout.screenRect.x,
+			y: layout.screenRect.y,
+			width: layout.screenRect.width,
+			height: layout.screenRect.height,
+			borderRadius: 0,
+			maskShape: "rectangle",
+		},
+		screenBorderRadius: layout.webcamRect.borderRadius,
+		screenCover: false,
+	};
+}
+
 /** Convert a webcam size percentage (10–50) to a fraction of the reference dimension. */
 function webcamSizeToFraction(percent: number): number {
 	const safe = Number.isFinite(percent) ? percent : 25;

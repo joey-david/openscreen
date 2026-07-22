@@ -2,6 +2,7 @@ import GIF from "gif.js";
 import type {
 	AnnotationRegion,
 	CropRegion,
+	InvertLayoutRegion,
 	SpeedRegion,
 	TrimRegion,
 	WebcamLayoutPreset,
@@ -36,6 +37,7 @@ interface GifExporterConfig {
 	zoomRegions: ZoomRegion[];
 	trimRegions?: TrimRegion[];
 	speedRegions?: SpeedRegion[];
+	invertLayoutRegions?: InvertLayoutRegion[];
 	showShadow: boolean;
 	shadowIntensity: number;
 	showBlur: boolean;
@@ -176,6 +178,7 @@ export class GifExporter {
 				webcamPosition: this.config.webcamPosition,
 				annotationRegions: this.config.annotationRegions,
 				speedRegions: this.config.speedRegions,
+				invertLayoutRegions: this.config.invertLayoutRegions,
 				previewWidth: this.config.previewWidth,
 				previewHeight: this.config.previewHeight,
 				cursorTelemetry: this.config.cursorTelemetry,

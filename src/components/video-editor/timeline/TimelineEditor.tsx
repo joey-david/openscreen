@@ -30,7 +30,13 @@ import { cn } from "@/lib/utils";
 import { ASPECT_RATIOS, type AspectRatio, getAspectRatioLabel } from "@/utils/aspectRatioUtils";
 import { formatShortcut } from "@/utils/platformUtils";
 import { BLUR_REGIONS_ENABLED } from "../featureFlags";
-import type { AnnotationRegion, SpeedRegion, TrimRegion, ZoomRegion } from "../types";
+import type {
+	AnnotationRegion,
+	InvertLayoutRegion,
+	SpeedRegion,
+	TrimRegion,
+	ZoomRegion,
+} from "../types";
 import BackgroundWaveform from "./BackgroundWaveform";
 import Item from "./Item";
 import KeyframeMarkers from "./KeyframeMarkers";
@@ -84,6 +90,12 @@ interface TimelineEditorProps {
 	onSpeedAdded?: (span: Span) => void;
 	onSpeedSpanChange?: (id: string, span: Span) => void;
 	onSpeedDelete?: (id: string) => void;
+	invertLayoutRegions?: InvertLayoutRegion[];
+	onInvertLayoutAdded?: (span: Span) => void;
+	onInvertLayoutSpanChange?: (id: string, span: Span) => void;
+	onInvertLayoutDelete?: (id: string) => void;
+	selectedInvertLayoutId?: string | null;
+	onSelectInvertLayout?: (id: string | null) => void;
 	selectedSpeedId?: string | null;
 	onSelectSpeed?: (id: string | null) => void;
 	aspectRatio: AspectRatio;
@@ -112,7 +124,7 @@ interface TimelineRenderItem {
 	zoomCustomScale?: number;
 	speedValue?: number;
 	isAutoFocus?: boolean;
-	variant: "zoom" | "trim" | "annotation" | "speed" | "blur";
+	variant: "zoom" | "trim" | "annotation" | "speed" | "blur" | "invert";
 }
 
 const SCALE_CANDIDATES = [

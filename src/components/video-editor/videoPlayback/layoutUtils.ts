@@ -1,6 +1,7 @@
 import { Application, Graphics, Sprite } from "pixi.js";
 import {
 	computeCompositeLayout,
+	invertCompositeLayout,
 	type RenderRect,
 	type Size,
 	type StyledRenderRect,
@@ -24,6 +25,7 @@ interface LayoutParams {
 	webcamSizePreset?: WebcamSizePreset;
 	webcamPosition?: { cx: number; cy: number } | null;
 	webcamMaskShape?: WebcamMaskShape;
+	invertLayout?: boolean;
 }
 
 interface LayoutResult {
@@ -53,6 +55,7 @@ export function layoutVideoContent(params: LayoutParams): LayoutResult | null {
 		webcamSizePreset,
 		webcamPosition,
 		webcamMaskShape,
+		invertLayout = false,
 	} = params;
 
 	const videoWidth = lockedVideoDimensions?.width || videoElement.videoWidth;
@@ -105,11 +108,12 @@ export function layoutVideoContent(params: LayoutParams): LayoutResult | null {
 		return null;
 	}
 
-	const screenRect = compositeLayout.screenRect;
+	const effectiveLayout = invertLayout ? invertCompositeLayout(compositeLayout) : compositeLayout;
+	const screenRect = effectiveLayout.screenRect;
 
 	// Cover mode: scale to fill the rect (may crop), otherwise fit-to-width
 	let scale: number;
-	if (compositeLayout.screenCover) {
+	if (effectiveLayout.screenCover) {
 		scale = Math.max(screenRect.width / croppedVideoWidth, screenRect.height / croppedVideoHeight);
 	} else {
 		scale = screenRect.width / croppedVideoWidth;
@@ -148,8 +152,8 @@ export function layoutVideoContent(params: LayoutParams): LayoutResult | null {
 		baseOffset: { x: spriteX, y: spriteY },
 		maskRect: compositeLayout.screenRect,
 		maskBorderRadius:
-			compositeLayout.screenBorderRadius ?? (compositeLayout.screenCover ? 0 : borderRadius),
-		webcamRect: compositeLayout.webcamRect,
+			effectiveLayout.screenBorderRadius ?? (effectiveLayout.screenCover ? 0 : borderRadius),
+		webcamRect: effectiveLayout.webcamRect,
 		cropBounds: { startX: cropStartX, endX: cropEndX, startY: cropStartY, endY: cropEndY },
 	};
 }
