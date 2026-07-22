@@ -25,6 +25,7 @@
 		"build:native:win": "node scripts/build-windows-wgc-helper.mjs",
 		"build:win": "npm run build:native:win && tsc && vite build && electron-builder --win --config.npmRebuild=false",
 		"build:linux": "tsc && vite build && electron-builder --linux AppImage deb pacman --config.npmRebuild=false",
+		"benchmark": "node scripts/benchmark-optimizations.mjs",
 		"test": "vitest --run",
 		"test:watch": "vitest",
 		"test:cursor-native:win": "node scripts/test-windows-native-cursor.mjs",
