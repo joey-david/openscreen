@@ -43,6 +43,11 @@ import type { CursorRecordingSession } from "../native-bridge/cursor/recording/s
 import { patchWebmDurationOnDisk } from "../recording/webm-duration";
 import { ExportStreamRegistry, registerExportStreamHandlers } from "./exportStream";
 import { registerNativeBridgeHandlers } from "./nativeBridge";
+import {
+	guardNativeCaptureCommandChannel,
+	observeNativeMacCaptureStopEvent,
+	sendNativeCaptureCommand,
+} from "./nativeCaptureCommands";
 import { RecordingStreamRegistry, registerRecordingStreamHandlers } from "./recordingStream";
 
 const PROJECT_FILE_EXTENSION = "openscreen";
@@ -1131,26 +1136,28 @@ function waitForNativeMacCaptureStart(proc: ChildProcessWithoutNullStreams) {
 
 function waitForNativeMacCaptureStop(proc: ChildProcessWithoutNullStreams) {
 	return new Promise<string>((resolve, reject) => {
+		const stopState = { terminalError: null as Error | null };
 		const timer = setTimeout(() => {
 			cleanup();
 			reject(
-				new Error(
-					`Timed out waiting for native macOS capture to stop. Output path: ${
-						nativeMacCaptureTargetPath ?? "unknown"
-					}. Output: ${nativeMacCaptureOutput.trim()}`,
-				),
+				stopState.terminalError ??
+					new Error(
+						`Timed out waiting for native macOS capture to stop. Output path: ${
+							nativeMacCaptureTargetPath ?? "unknown"
+						}. Output: ${nativeMacCaptureOutput.trim()}`,
+					),
 			);
 		}, 30_000);
 
 		const inspect = (event: Record<string, unknown>) => {
-			if (event.event === "recording-stopped") {
+			const stoppedPath = observeNativeMacCaptureStopEvent(
+				stopState,
+				event,
+				nativeMacCaptureTargetPath,
+			);
+			if (stoppedPath !== null) {
 				cleanup();
-				resolve(String(event.screenPath ?? nativeMacCaptureTargetPath ?? ""));
-				return;
-			}
-			if (event.event === "error") {
-				cleanup();
-				reject(new Error(String(event.message ?? event.code ?? "Native macOS capture failed")));
+				resolve(stoppedPath);
 			}
 		};
 
@@ -1163,10 +1170,11 @@ function waitForNativeMacCaptureStop(proc: ChildProcessWithoutNullStreams) {
 			}
 			cleanup();
 			reject(
-				new Error(
-					nativeMacCaptureOutput.trim() ||
-						`Native macOS capture exited with code=${code ?? "unknown"}`,
-				),
+				stopState.terminalError ??
+					new Error(
+						nativeMacCaptureOutput.trim() ||
+							`Native macOS capture exited with code=${code ?? "unknown"}`,
+					),
 			);
 		};
 		const onError = (error: Error) => {
@@ -1683,6 +1691,7 @@ export function registerIpcHandlers(
 					windowsHide: true,
 				});
 				nativeWindowsCaptureProcess = proc;
+				guardNativeCaptureCommandChannel(proc, "native-wgc");
 
 				await waitForNativeWindowsCaptureStart(proc);
 				const captureStartedAtMs = Date.now();
@@ -1833,6 +1842,7 @@ export function registerIpcHandlers(
 				stdio: ["pipe", "pipe", "pipe"],
 			});
 			nativeMacCaptureProcess = proc;
+			guardNativeCaptureCommandChannel(proc, "native-sck");
 			attachNativeMacCaptureOutputDrain(proc);
 
 			await waitForNativeMacCaptureStart(proc);
@@ -1882,12 +1892,8 @@ export function registerIpcHandlers(
 		if (nativeMacIsPaused) {
 			return { success: true };
 		}
-		if (!proc.stdin.writable) {
-			return { success: false, error: "Native macOS capture command channel is closed." };
-		}
-
 		try {
-			proc.stdin.write("pause\n");
+			await sendNativeCaptureCommand(proc, "pause");
 			nativeMacIsPaused = true;
 			nativeMacPauseStartedAtMs = Date.now();
 			return { success: true };
@@ -1908,12 +1914,8 @@ export function registerIpcHandlers(
 		if (!nativeMacIsPaused) {
 			return { success: true };
 		}
-		if (!proc.stdin.writable) {
-			return { success: false, error: "Native macOS capture command channel is closed." };
-		}
-
 		try {
-			proc.stdin.write("resume\n");
+			await sendNativeCaptureCommand(proc, "resume");
 			completeNativeMacCursorPauseRange();
 			nativeMacIsPaused = false;
 			return { success: true };
@@ -1930,12 +1932,8 @@ export function registerIpcHandlers(
 		if (nativeWindowsIsPaused) {
 			return { success: true };
 		}
-		if (!proc.stdin.writable) {
-			return { success: false, error: "Native Windows capture command channel is closed." };
-		}
-
 		try {
-			proc.stdin.write("pause\n");
+			await sendNativeCaptureCommand(proc, "pause");
 			nativeWindowsIsPaused = true;
 			nativeWindowsPauseStartedAtMs = Date.now();
 			return { success: true };
@@ -1952,12 +1950,8 @@ export function registerIpcHandlers(
 		if (!nativeWindowsIsPaused) {
 			return { success: true };
 		}
-		if (!proc.stdin.writable) {
-			return { success: false, error: "Native Windows capture command channel is closed." };
-		}
-
 		try {
-			proc.stdin.write("resume\n");
+			await sendNativeCaptureCommand(proc, "resume");
 			completeNativeWindowsCursorPauseRange();
 			nativeWindowsIsPaused = false;
 			return { success: true };
@@ -1979,9 +1973,10 @@ export function registerIpcHandlers(
 
 		try {
 			completeNativeWindowsCursorPauseRange();
-			const stoppedPathPromise = waitForNativeWindowsCaptureStop(proc);
-			proc.stdin.write("stop\n");
-			const stoppedPath = await stoppedPathPromise;
+			const [stoppedPath] = await Promise.all([
+				waitForNativeWindowsCaptureStop(proc),
+				sendNativeCaptureCommand(proc, "stop"),
+			]);
 			const screenVideoPath = stoppedPath || preferredPath;
 			if (!screenVideoPath) {
 				throw new Error("Native Windows capture did not return an output path.");
@@ -2072,9 +2067,10 @@ export function registerIpcHandlers(
 
 		try {
 			completeNativeMacCursorPauseRange();
-			const stoppedPathPromise = waitForNativeMacCaptureStop(proc);
-			proc.stdin.write("stop\n");
-			const stoppedPath = await stoppedPathPromise;
+			const [stoppedPath] = await Promise.all([
+				waitForNativeMacCaptureStop(proc),
+				sendNativeCaptureCommand(proc, "stop"),
+			]);
 			const screenVideoPath = stoppedPath || preferredPath;
 			if (!screenVideoPath) {
 				throw new Error("Native macOS capture did not return an output path.");

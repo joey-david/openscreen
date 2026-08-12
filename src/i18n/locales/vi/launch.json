@@ -21,6 +21,7 @@
 	"webcam": {
 		"enableWebcam": "Bật webcam",
 		"disableWebcam": "Tắt webcam",
+		"webcamOnly": "Chỉ webcam",
 		"defaultCamera": "Máy ảnh Mặc định",
 		"searching": "Đang tìm kiếm...",
 		"noneFound": "Không tìm thấy máy ảnh",
@@ -33,6 +34,7 @@
 		"defaultSourceName": "Màn hình"
 	},
 	"recording": {
+		"startRecording": "Bắt đầu ghi hình",
 		"selectSource": "Vui lòng chọn một nguồn để ghi"
 	},
 	"language": "Ngôn ngữ",

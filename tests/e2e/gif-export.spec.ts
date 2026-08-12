@@ -1,4 +1,5 @@
 import { spawnSync } from "node:child_process";
+import { once } from "node:events";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -12,6 +13,7 @@ const TEST_VIDEO = path.join(__dirname, "../fixtures/sample.webm");
 
 async function exportFromLoadedVideo(format: "gif" | "mp4"): Promise<Buffer> {
 	const outputPath = path.join(os.tmpdir(), `test-${format}-export-${Date.now()}.${format}`);
+	const testUserDataDir = fs.mkdtempSync(path.join(os.tmpdir(), "openscreen-export-e2e-"));
 	let testVideoInRecordings = "";
 
 	const app = await electron.launch({
@@ -21,9 +23,11 @@ async function exportFromLoadedVideo(format: "gif" | "mp4"): Promise<Buffer> {
 			"--no-sandbox",
 			// Force software WebGL in headless CI to avoid GPU framebuffer errors.
 			"--enable-unsafe-swiftshader",
+			`--user-data-dir=${testUserDataDir}`,
 		],
 		env: {
 			...process.env,
+			ELECTRON_USER_DATA_DIR: testUserDataDir,
 			// Set HEADLESS=false to show windows while debugging.
 			HEADLESS: process.env["HEADLESS"] ?? "true",
 		},
@@ -37,28 +41,11 @@ async function exportFromLoadedVideo(format: "gif" | "mp4"): Promise<Buffer> {
 		const hudWindow = await app.firstWindow({ timeout: 60_000 });
 		await hudWindow.waitForLoadState("domcontentloaded");
 
-		await app.evaluate(({ ipcMain }, targetPath: string) => {
-			ipcMain.removeHandler("pick-export-save-path");
-			ipcMain.removeHandler("write-export-to-path");
-			ipcMain.handle("pick-export-save-path", () => ({
-				success: true,
-				path: targetPath,
+		await app.evaluate(({ dialog }, targetPath: string) => {
+			dialog.showSaveDialog = async () => ({
 				canceled: false,
-			}));
-			ipcMain.handle(
-				"write-export-to-path",
-				(_event: Electron.IpcMainInvokeEvent, buffer: ArrayBuffer, filePath: string) => {
-					if (filePath !== targetPath) {
-						return {
-							success: false,
-							error: `Unexpected export path: ${filePath}`,
-						};
-					}
-					(globalThis as Record<string, unknown>)["__testExportData"] =
-						Buffer.from(buffer).toString("base64");
-					return { success: true, path: filePath };
-				},
-			);
+				filePath: targetPath,
+			});
 		}, outputPath);
 
 		const userDataDir = await app.evaluate(({ app: electronApp }) => {
@@ -101,17 +88,10 @@ async function exportFromLoadedVideo(format: "gif" | "mp4"): Promise<Buffer> {
 		await editorWindow.getByTestId("testId-export-button").click();
 
 		await expect
-			.poll(
-				() =>
-					app.evaluate(() => Boolean((globalThis as Record<string, unknown>)["__testExportData"])),
-				{ timeout: 90_000 },
-			)
+			.poll(() => fs.existsSync(outputPath) && fs.statSync(outputPath).size > 1024, {
+				timeout: 90_000,
+			})
 			.toBe(true);
-
-		const base64 = await app.evaluate(
-			() => (globalThis as Record<string, unknown>)["__testExportData"] as string,
-		);
-		fs.writeFileSync(outputPath, Buffer.from(base64, "base64"));
 
 		expect(fs.existsSync(outputPath), `${format.toUpperCase()} not found at ${outputPath}`).toBe(
 			true,
@@ -120,6 +100,8 @@ async function exportFromLoadedVideo(format: "gif" | "mp4"): Promise<Buffer> {
 		expect(stats.size).toBeGreaterThan(1024);
 		return fs.readFileSync(outputPath);
 	} finally {
+		const exitPromise =
+			electronProcess.exitCode === null ? once(electronProcess, "exit") : Promise.resolve();
 		await app
 			.evaluate(({ app: electronApp }) => {
 				electronApp.exit(0);
@@ -127,21 +109,30 @@ async function exportFromLoadedVideo(format: "gif" | "mp4"): Promise<Buffer> {
 			.catch(() => {
 				// The process may already be gone after export completes.
 			});
-		if (electronProcess.pid) {
+		if (electronProcess.exitCode === null) {
 			if (process.platform === "win32") {
 				spawnSync("taskkill", ["/PID", String(electronProcess.pid), "/T", "/F"], {
 					stdio: "ignore",
 				});
-			} else if (!electronProcess.killed) {
+			} else {
 				electronProcess.kill("SIGKILL");
 			}
 		}
+		await exitPromise.catch(() => {
+			// Cleanup below can still remove the isolated test data.
+		});
 		if (fs.existsSync(outputPath)) {
 			fs.unlinkSync(outputPath);
 		}
 		if (testVideoInRecordings && fs.existsSync(testVideoInRecordings)) {
 			fs.unlinkSync(testVideoInRecordings);
 		}
+		fs.rmSync(testUserDataDir, {
+			recursive: true,
+			force: true,
+			maxRetries: 5,
+			retryDelay: 100,
+		});
 	}
 }
 

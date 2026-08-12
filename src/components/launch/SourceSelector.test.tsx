@@ -75,4 +75,26 @@ describe("SourceSelector", () => {
 		});
 		expect(getSources).toHaveBeenCalledTimes(2);
 	});
+
+	it("exposes sources as named buttons and selects with the existing source contract", async () => {
+		const source = {
+			id: "screen:1:0",
+			name: "Display 1",
+			thumbnail: "data:image/png;base64,abc",
+			display_id: "1",
+			appIcon: null,
+		};
+		const selectSource = vi.fn().mockResolvedValue(source);
+		window.electronAPI = {
+			...window.electronAPI,
+			getSources: vi.fn().mockResolvedValue([source]),
+			selectSource,
+		} as typeof window.electronAPI;
+
+		render(<SourceSelector />);
+
+		fireEvent.click(await screen.findByRole("button", { name: "Display 1" }));
+		fireEvent.click(screen.getByRole("button", { name: "Share" }));
+		await waitFor(() => expect(selectSource).toHaveBeenCalledWith(source));
+	});
 });

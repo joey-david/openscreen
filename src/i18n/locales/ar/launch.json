@@ -21,6 +21,7 @@
 	"webcam": {
 		"enableWebcam": "تفعيل كاميرا الويب",
 		"disableWebcam": "تعطيل كاميرا الويب",
+		"webcamOnly": "كاميرا الويب فقط",
 		"defaultCamera": "الكاميرا الافتراضية",
 		"searching": "جاري البحث...",
 		"noneFound": "لم يتم العثور على كاميرا",
@@ -33,6 +34,7 @@
 		"defaultSourceName": "الشاشة"
 	},
 	"recording": {
+		"startRecording": "بدء التسجيل",
 		"selectSource": "يرجى تحديد مصدر للتسجيل"
 	},
 	"language": "اللغة",

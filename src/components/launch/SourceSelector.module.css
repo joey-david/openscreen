@@ -15,6 +15,9 @@
 }
 
 .sourceCard {
+	appearance: none;
+	width: 100%;
+	text-align: left;
 	corner-shape: squircle;
 	border-radius: 13px;
 	background: rgba(255, 255, 255, 0.045);
@@ -26,6 +29,11 @@
 		background-color 0.2s ease,
 		transform 0.2s ease;
 	cursor: pointer;
+}
+
+.sourceCard:focus-visible {
+	outline: 2px solid #34b27b;
+	outline-offset: 2px;
 }
 
 .sourceCard:hover {

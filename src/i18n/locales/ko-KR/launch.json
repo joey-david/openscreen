@@ -21,6 +21,7 @@
 	"webcam": {
 		"enableWebcam": "웹캠 활성화",
 		"disableWebcam": "웹캠 비활성화",
+		"webcamOnly": "웹캠만",
 		"defaultCamera": "기본 카메라",
 		"searching": "검색 중...",
 		"noneFound": "카메라를 찾을 수 없음",
@@ -37,6 +38,7 @@
 		"defaultSourceName": "화면"
 	},
 	"recording": {
+		"startRecording": "녹화 시작",
 		"selectSource": "녹화할 소스를 선택해 주세요"
 	},
 	"language": "언어",

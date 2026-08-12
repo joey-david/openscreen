@@ -25,8 +25,7 @@ export type RecorderHandle = {
  *
  * With `fileName`, chunks stream to disk through the main process so a long recording
  * never buffers the whole video in the renderer (#616). Chunks held in memory until the
- * stream confirms open; if the open fails, that buffer is the complete fallback. Webcam
- * sidecars omit `fileName` and buffer in memory, since finalize reads the blob directly.
+ * stream confirms open; if the open fails, that buffer is the complete fallback.
  */
 export function createRecorderHandle(
 	stream: MediaStream,

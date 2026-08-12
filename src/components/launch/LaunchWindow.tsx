@@ -26,7 +26,7 @@ import { nativeBridgeClient } from "@/native";
 import { useAudioLevelMeter } from "../../hooks/useAudioLevelMeter";
 import { useCameraDevices } from "../../hooks/useCameraDevices";
 import { useMicrophoneDevices } from "../../hooks/useMicrophoneDevices";
-import { useScreenRecorder } from "../../hooks/useScreenRecorder";
+import { type RecordingMode, useScreenRecorder } from "../../hooks/useScreenRecorder";
 import { requestCameraAccess } from "../../lib/requestCameraAccess";
 import { formatTimePadded } from "../../utils/timeUtils";
 import { AudioLevelMeter } from "../ui/audio-level-meter";
@@ -91,6 +91,8 @@ const hudSidebarVerticalClasses =
 /** Launches the floating recording HUD and its recorder controls. */
 export function LaunchWindow() {
 	const t = useScopedT("launch");
+	const tc = useScopedT("common");
+	const [recordingMode, setRecordingMode] = useState<RecordingMode>("screen");
 	const availableLocales = getAvailableLocales();
 	const {
 		locale,
@@ -126,7 +128,7 @@ export function LaunchWindow() {
 		setWebcamDeviceName,
 		cursorCaptureMode,
 		setCursorCaptureMode,
-	} = useScreenRecorder();
+	} = useScreenRecorder(recordingMode);
 
 	const showMicControls = microphoneEnabled && !recording;
 	const showWebcamControls = webcamEnabled && !recording;
@@ -423,6 +425,7 @@ export function LaunchWindow() {
 	const [selectedSource, setSelectedSource] = useState("Screen");
 	const [hasSelectedSource, setHasSelectedSource] = useState(false);
 	const [, setRecordPointerDownCount] = useState(0);
+	const canStartRecording = recordingMode === "webcam-only" ? webcamEnabled : hasSelectedSource;
 
 	useEffect(() => {
 		const checkSelectedSource = async () => {
@@ -452,6 +455,29 @@ export function LaunchWindow() {
 			});
 		}
 	};
+
+	const selectScreenMode = () => {
+		if (!recording) {
+			setRecordingMode("screen");
+		}
+	};
+
+	const selectWebcamOnlyMode = async () => {
+		if (recording) {
+			return;
+		}
+		if (!webcamEnabled && !(await setWebcamEnabled(true))) {
+			return;
+		}
+		setSystemAudioEnabled(false);
+		setRecordingMode("webcam-only");
+	};
+
+	useEffect(() => {
+		if (recordingMode === "webcam-only" && !webcamEnabled && !recording) {
+			setRecordingMode("screen");
+		}
+	}, [recording, recordingMode, webcamEnabled]);
 
 	const sendHudOverlayHide = () => {
 		if (window.electronAPI && window.electronAPI.hudOverlayHide) {
@@ -753,22 +779,46 @@ export function LaunchWindow() {
 					</button>
 				</Tooltip>
 
-				{/* Source selector */}
-				<button
-					data-testid="launch-source-selector-button"
-					className={`${hudGroupClasses} h-8 ${trayLayout === "vertical" ? "w-8 justify-center px-0" : "px-2.5"} ${styles.electronNoDrag}`}
-					onClick={openSourceSelector}
-					disabled={recording}
-					title={selectedSource}
-					aria-label={selectedSource}
+				{/* Recording mode and screen source */}
+				<div
+					className={`${hudGroupClasses} ${trayLayout === "vertical" ? "flex-col py-1" : ""} ${styles.electronNoDrag}`}
+					role="group"
+					aria-label="Recording mode"
 				>
-					{getIcon("monitor", "text-white/80")}
-					<span
-						className={`${trayLayout === "vertical" ? "sr-only" : "max-w-[86px]"} truncate text-[11px] font-medium text-white/75`}
+					<button
+						data-testid="launch-source-selector-button"
+						className={`flex h-8 items-center justify-center gap-1.5 rounded-lg transition-colors hover:bg-white/10 ${trayLayout === "vertical" ? "w-8 px-0" : "px-2.5"}`}
+						onClick={recordingMode === "webcam-only" ? selectScreenMode : openSourceSelector}
+						disabled={recording}
+						title={selectedSource}
+						aria-label={selectedSource}
+						aria-pressed={recordingMode === "screen"}
 					>
-						{selectedSource}
-					</span>
-				</button>
+						{getIcon("monitor", recordingMode === "screen" ? "text-green-400" : "text-white/40")}
+						<span
+							className={`${trayLayout === "vertical" ? "sr-only" : "max-w-[86px]"} truncate text-[11px] font-medium text-white/75`}
+						>
+							{selectedSource}
+						</span>
+					</button>
+					<Tooltip content={t("webcam.webcamOnly")}>
+						<button
+							data-testid="launch-webcam-only-button"
+							type="button"
+							className={hudIconBtnClasses}
+							onClick={() => void selectWebcamOnlyMode()}
+							disabled={recording}
+							title={t("webcam.webcamOnly")}
+							aria-label={t("webcam.webcamOnly")}
+							aria-pressed={recordingMode === "webcam-only"}
+						>
+							{getIcon(
+								"webcamOn",
+								recordingMode === "webcam-only" ? "text-green-400" : "text-white/40",
+							)}
+						</button>
+					</Tooltip>
+				</div>
 
 				{/* Audio controls group */}
 				<div
@@ -777,9 +827,14 @@ export function LaunchWindow() {
 					<button
 						data-testid="launch-system-audio-button"
 						className={`${hudIconBtnClasses} ${systemAudioEnabled ? "drop-shadow-[0_0_4px_rgba(74,222,128,0.4)]" : ""}`}
-						onClick={() => !recording && setSystemAudioEnabled(!systemAudioEnabled)}
-						disabled={recording}
+						onClick={() =>
+							!recording && recordingMode === "screen" && setSystemAudioEnabled(!systemAudioEnabled)
+						}
+						disabled={recording || recordingMode === "webcam-only"}
 						title={
+							systemAudioEnabled ? t("audio.disableSystemAudio") : t("audio.enableSystemAudio")
+						}
+						aria-label={
 							systemAudioEnabled ? t("audio.disableSystemAudio") : t("audio.enableSystemAudio")
 						}
 					>
@@ -793,6 +848,9 @@ export function LaunchWindow() {
 						onClick={toggleMicrophone}
 						disabled={recording}
 						title={microphoneEnabled ? t("audio.disableMicrophone") : t("audio.enableMicrophone")}
+						aria-label={
+							microphoneEnabled ? t("audio.disableMicrophone") : t("audio.enableMicrophone")
+						}
 						onPointerDown={() => {
 							setRecordPointerDownCount((count) => count + 1);
 						}}
@@ -807,14 +865,27 @@ export function LaunchWindow() {
 						onClick={async () => {
 							await setWebcamEnabled(!webcamEnabled);
 						}}
-						disabled={recording}
-						title={webcamEnabled ? t("webcam.disableWebcam") : t("webcam.enableWebcam")}
+						disabled={recording || recordingMode === "webcam-only"}
+						title={
+							recordingMode === "webcam-only"
+								? t("webcam.webcamOnly")
+								: webcamEnabled
+									? t("webcam.disableWebcam")
+									: t("webcam.enableWebcam")
+						}
+						aria-label={
+							recordingMode === "webcam-only"
+								? t("webcam.webcamOnly")
+								: webcamEnabled
+									? t("webcam.disableWebcam")
+									: t("webcam.enableWebcam")
+						}
 					>
 						{webcamEnabled
 							? getIcon("webcamOn", "text-green-400")
 							: getIcon("webcamOff", "text-white/40")}
 					</button>
-					{supportsCursorModeToggle && (
+					{supportsCursorModeToggle && recordingMode === "screen" && (
 						<button
 							data-testid="launch-cursor-mode-button"
 							className={`${hudIconBtnClasses} ${
@@ -830,6 +901,11 @@ export function LaunchWindow() {
 							}
 							disabled={recording}
 							title={
+								cursorCaptureMode === "editable-overlay"
+									? t("cursor.useSystemCursor")
+									: t("cursor.useEditableCursor")
+							}
+							aria-label={
 								cursorCaptureMode === "editable-overlay"
 									? t("cursor.useSystemCursor")
 									: t("cursor.useEditableCursor")
@@ -854,13 +930,14 @@ export function LaunchWindow() {
 							: "bg-white/[0.06] hover:bg-white/[0.10]"
 					}`}
 					onClick={toggleRecording}
-					disabled={!hasSelectedSource && !recording}
+					disabled={!canStartRecording && !recording}
+					aria-label={recording ? tc("actions.stopRecording") : t("recording.startRecording")}
 					style={{ flex: "0 0 auto" }}
 				>
 					<div className={`flex items-center justify-center ${recording ? "gap-1.5" : ""}`}>
 						{recording
 							? getIcon("stop", paused ? "text-amber-400" : "text-red-400")
-							: getIcon("record", hasSelectedSource ? "text-white/80" : "text-white/30")}
+							: getIcon("record", canStartRecording ? "text-white/80" : "text-white/30")}
 						{recording && (
 							<span
 								className={`${paused ? "text-amber-400" : "text-red-400"} inline-block w-[34px] text-left text-xs font-semibold tabular-nums`}
@@ -879,7 +956,11 @@ export function LaunchWindow() {
 							<Tooltip
 								content={paused ? t("tooltips.resumeRecording") : t("tooltips.pauseRecording")}
 							>
-								<button className={hudAuxIconBtnClasses} onClick={togglePaused}>
+								<button
+									className={hudAuxIconBtnClasses}
+									onClick={togglePaused}
+									aria-label={paused ? t("tooltips.resumeRecording") : t("tooltips.pauseRecording")}
+								>
 									{getIcon(
 										paused ? "resume" : "pause",
 										paused ? "text-amber-400" : "text-white/60",
@@ -888,12 +969,20 @@ export function LaunchWindow() {
 							</Tooltip>
 						)}
 						<Tooltip content={t("tooltips.restartRecording")}>
-							<button className={hudAuxIconBtnClasses} onClick={restartRecording}>
+							<button
+								className={hudAuxIconBtnClasses}
+								onClick={restartRecording}
+								aria-label={t("tooltips.restartRecording")}
+							>
 								{getIcon("restart", "text-white/60")}
 							</button>
 						</Tooltip>
 						<Tooltip content={t("tooltips.cancelRecording")}>
-							<button className={hudAuxIconBtnClasses} onClick={cancelRecording}>
+							<button
+								className={hudAuxIconBtnClasses}
+								onClick={cancelRecording}
+								aria-label={t("tooltips.cancelRecording")}
+							>
 								{getIcon("cancel", "text-white/60")}
 							</button>
 						</Tooltip>

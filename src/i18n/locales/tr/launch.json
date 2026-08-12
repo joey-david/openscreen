@@ -21,6 +21,7 @@
 	"webcam": {
 		"enableWebcam": "Kamerayı etkinleştir",
 		"disableWebcam": "Kamerayı devre dışı bırak",
+		"webcamOnly": "Yalnızca kamera",
 		"defaultCamera": "Varsayılan Kamera",
 		"searching": "Aranıyor...",
 		"noneFound": "Kamera bulunamadı",
@@ -37,6 +38,7 @@
 		"defaultSourceName": "Ekran"
 	},
 	"recording": {
+		"startRecording": "Kaydı başlat",
 		"selectSource": "Lütfen kayıt için bir kaynak seçin"
 	},
 	"language": "Dil",

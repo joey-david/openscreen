@@ -110,19 +110,17 @@ export function SourceSelector() {
 		const isSelected = selectedSource?.id === source.id;
 		const sourceKind = source.id.startsWith("screen:") ? "screen" : "window";
 		return (
-			<div
+			<button
 				key={source.id}
+				type="button"
 				data-testid="source-selector-card"
 				data-source-kind={sourceKind}
+				aria-label={source.name}
 				className={`${styles.sourceCard} ${isSelected ? styles.selected : ""} p-1.5`}
 				onClick={() => handleSourceSelect(source)}
 			>
 				<div className="relative mb-1.5 overflow-hidden rounded-lg border border-white/[0.06] bg-black/30">
-					<img
-						src={source.thumbnail || ""}
-						alt={source.name}
-						className="w-full aspect-video object-cover"
-					/>
+					<img src={source.thumbnail || ""} alt="" className="w-full aspect-video object-cover" />
 					{isSelected && (
 						<div className="absolute right-1.5 top-1.5">
 							<div className={styles.checkBadge}>
@@ -137,7 +135,7 @@ export function SourceSelector() {
 					)}
 					<div className={`${styles.name} truncate`}>{source.name}</div>
 				</div>
-			</div>
+			</button>
 		);
 	};
 

@@ -21,6 +21,7 @@
 	"webcam": {
 		"enableWebcam": "ウェブカメラを有効にする",
 		"disableWebcam": "ウェブカメラを無効にする",
+		"webcamOnly": "ウェブカメラのみ",
 		"defaultCamera": "デフォルトのカメラ",
 		"searching": "検索中...",
 		"noneFound": "カメラが見つかりません",
@@ -37,6 +38,7 @@
 		"defaultSourceName": "画面"
 	},
 	"recording": {
+		"startRecording": "録画を開始",
 		"selectSource": "録画するソースを選択してください"
 	},
 	"language": "言語",

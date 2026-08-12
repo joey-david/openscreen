@@ -21,6 +21,7 @@
 	"webcam": {
 		"enableWebcam": "Abilita webcam",
 		"disableWebcam": "Disabilita webcam",
+		"webcamOnly": "Solo webcam",
 		"defaultCamera": "Fotocamera predefinita",
 		"searching": "Ricerca in corso...",
 		"noneFound": "Nessuna fotocamera trovata",
@@ -37,6 +38,7 @@
 		"defaultSourceName": "Schermo"
 	},
 	"recording": {
+		"startRecording": "Avvia registrazione",
 		"selectSource": "Seleziona una sorgente da registrare"
 	},
 	"language": "Lingua",

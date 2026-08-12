@@ -19,6 +19,7 @@
 	"webcam": {
 		"enableWebcam": "Ativar webcam",
 		"disableWebcam": "Desativar webcam",
+		"webcamOnly": "Somente webcam",
 		"defaultCamera": "Câmera Padrão",
 		"searching": "Procurando...",
 		"noneFound": "Nenhuma câmera encontrada",
@@ -35,6 +36,7 @@
 		"defaultSourceName": "Tela"
 	},
 	"recording": {
+		"startRecording": "Iniciar gravação",
 		"selectSource": "Por favor, selecione uma fonte para gravar"
 	},
 	"language": "Idioma",

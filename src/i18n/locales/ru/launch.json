@@ -21,6 +21,7 @@
 	"webcam": {
 		"enableWebcam": "Включить веб-камеру",
 		"disableWebcam": "Отключить веб-камеру",
+		"webcamOnly": "Только веб-камера",
 		"defaultCamera": "Камера по умолчанию",
 		"searching": "Поиск...",
 		"noneFound": "Камера не найдена",
@@ -33,6 +34,7 @@
 		"defaultSourceName": "Экран"
 	},
 	"recording": {
+		"startRecording": "Начать запись",
 		"selectSource": "Пожалуйста, выберите источник для записи"
 	},
 	"language": "Язык",

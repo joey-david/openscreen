@@ -45,6 +45,10 @@ const AUDIO_BITRATE_SYSTEM = 192_000;
 
 const MIC_GAIN_BOOST = 1.4;
 const WEBCAM_TARGET_FRAME_RATE = 30;
+const WEBCAM_TARGET_WIDTH = 1920;
+const WEBCAM_TARGET_HEIGHT = 1080;
+
+export type RecordingMode = "screen" | "webcam-only";
 
 type UseScreenRecorderReturn = {
 	recording: boolean;
@@ -86,7 +90,9 @@ type NativeMacRecordingHandle = {
 	paused: boolean;
 };
 
-export function useScreenRecorder(): UseScreenRecorderReturn {
+export function useScreenRecorder(
+	recordingMode: RecordingMode = "screen",
+): UseScreenRecorderReturn {
 	const t = useScopedT("editor");
 	const [recording, setRecording] = useState(false);
 	const [paused, setPaused] = useState(false);
@@ -109,6 +115,7 @@ export function useScreenRecorder(): UseScreenRecorderReturn {
 	const webcamStream = useRef<MediaStream | null>(null);
 	const mixingContext = useRef<AudioContext | null>(null);
 	const recordingId = useRef<number>(0);
+	const recordingCursorCaptureMode = useRef<CursorCaptureMode>("editable-overlay");
 	const accumulatedDurationMs = useRef(0);
 	const segmentStartedAt = useRef<number | null>(null);
 	const finalizingRecordingId = useRef<number | null>(null);
@@ -148,10 +155,9 @@ export function useScreenRecorder(): UseScreenRecorderReturn {
 		return preferred.find((type) => MediaRecorder.isTypeSupported(type)) ?? "video/webm";
 	};
 
-	const computeBitrate = (width: number, height: number) => {
+	const computeBitrate = (width: number, height: number, frameRate = TARGET_FRAME_RATE) => {
 		const pixels = width * height;
-		const highFrameRateBoost =
-			TARGET_FRAME_RATE >= HIGH_FRAME_RATE_THRESHOLD ? HIGH_FRAME_RATE_BOOST : 1;
+		const highFrameRateBoost = frameRate >= HIGH_FRAME_RATE_THRESHOLD ? HIGH_FRAME_RATE_BOOST : 1;
 
 		if (pixels >= FOUR_K_PIXELS) {
 			return Math.round(BITRATE_4K * highFrameRateBoost);
@@ -235,14 +241,13 @@ export function useScreenRecorder(): UseScreenRecorderReturn {
 			try {
 				const stream = await navigator.mediaDevices.getUserMedia({
 					audio: false,
-					video: webcamDeviceId
-						? {
-								deviceId: { exact: webcamDeviceId },
-								frameRate: { ideal: WEBCAM_TARGET_FRAME_RATE, max: WEBCAM_TARGET_FRAME_RATE },
-							}
-						: {
-								frameRate: { ideal: WEBCAM_TARGET_FRAME_RATE, max: WEBCAM_TARGET_FRAME_RATE },
-							},
+					video: {
+						...(webcamDeviceId ? { deviceId: { exact: webcamDeviceId } } : {}),
+						facingMode: "user",
+						width: { ideal: WEBCAM_TARGET_WIDTH },
+						height: { ideal: WEBCAM_TARGET_HEIGHT },
+						frameRate: { ideal: WEBCAM_TARGET_FRAME_RATE, max: WEBCAM_TARGET_FRAME_RATE },
+					},
 				});
 
 				if (cancelled || thisAcquireId !== webcamAcquireId.current) {
@@ -304,6 +309,7 @@ export function useScreenRecorder(): UseScreenRecorderReturn {
 			activeWebcamRecorder: RecorderHandle | null,
 			duration: number,
 			activeRecordingId: number,
+			activeCursorCaptureMode: CursorCaptureMode,
 		) => {
 			if (finalizingRecordingId.current === activeRecordingId) {
 				return;
@@ -375,7 +381,7 @@ export function useScreenRecorder(): UseScreenRecorderReturn {
 								? { videoData: webcamVideoData, fileName: webcamFileName }
 								: undefined,
 						createdAt: activeRecordingId,
-						cursorCaptureMode,
+						cursorCaptureMode: activeCursorCaptureMode,
 						durationMs: duration,
 					});
 
@@ -414,7 +420,7 @@ export function useScreenRecorder(): UseScreenRecorderReturn {
 				}
 			})();
 		},
-		[cursorCaptureMode, teardownMedia],
+		[teardownMedia],
 	);
 
 	const finalizeNativeWindowsRecording = useCallback(
@@ -491,7 +497,8 @@ export function useScreenRecorder(): UseScreenRecorderReturn {
 								fileName: webcamFileName,
 							},
 							createdAt: activeNativeRecording.recordingId,
-							cursorCaptureMode,
+							cursorCaptureMode: recordingCursorCaptureMode.current,
+							durationMs: duration,
 						});
 						if (stored.success && stored.session) {
 							storedSession = stored.session;
@@ -525,7 +532,7 @@ export function useScreenRecorder(): UseScreenRecorderReturn {
 				}
 			}
 		},
-		[cursorCaptureMode, getRecordingDurationMs],
+		[getRecordingDurationMs],
 	);
 
 	const finalizeNativeMacRecording = useCallback(
@@ -596,7 +603,8 @@ export function useScreenRecorder(): UseScreenRecorderReturn {
 						screen: { fileName: screenFileName, videoData: new ArrayBuffer(0) },
 						webcam: { fileName: webcamFileName, videoData: webcamVideoData },
 						createdAt: activeNativeRecording.recordingId,
-						cursorCaptureMode,
+						cursorCaptureMode: recordingCursorCaptureMode.current,
+						durationMs: duration,
 					});
 					if (stored.success) {
 						result.session = stored.session;
@@ -632,7 +640,7 @@ export function useScreenRecorder(): UseScreenRecorderReturn {
 				}
 			}
 		},
-		[cursorCaptureMode, getRecordingDurationMs],
+		[getRecordingDurationMs],
 	);
 
 	const stopRecording = useRef(() => {
@@ -659,6 +667,7 @@ export function useScreenRecorder(): UseScreenRecorderReturn {
 			activeWebcamRecorder ?? null,
 			duration,
 			activeRecordingId,
+			recordingCursorCaptureMode.current,
 		);
 
 		if (
@@ -795,6 +804,188 @@ export function useScreenRecorder(): UseScreenRecorderReturn {
 		});
 	};
 
+	const acquireMicrophoneStream = async () => {
+		if (!microphoneEnabled || microphoneStream.current) {
+			return;
+		}
+
+		try {
+			microphoneStream.current = await navigator.mediaDevices.getUserMedia({
+				audio: microphoneDeviceId
+					? {
+							deviceId: { exact: microphoneDeviceId },
+							echoCancellation: true,
+							noiseSuppression: true,
+							autoGainControl: true,
+						}
+					: {
+							echoCancellation: true,
+							noiseSuppression: true,
+							autoGainControl: true,
+						},
+				video: false,
+			});
+		} catch (error) {
+			console.warn("Failed to get microphone access:", error);
+			toast.error(t("recording.microphoneDenied"));
+			setMicrophoneEnabled(false);
+		}
+	};
+
+	const beginBrowserRecording = async (
+		primaryMediaStream: MediaStream,
+		targetFrameRate: number,
+		includeWebcamSidecar: boolean,
+		countdownRunToken?: number,
+	) => {
+		screenStream.current = primaryMediaStream;
+		if (!isCountdownRunActive(countdownRunToken)) {
+			teardownMedia();
+			return;
+		}
+
+		await acquireMicrophoneStream();
+		if (!isCountdownRunActive(countdownRunToken)) {
+			teardownMedia();
+			return;
+		}
+
+		if (includeWebcamSidecar && webcamEnabled) {
+			await waitForWebcamReady();
+			if (!webcamStream.current) {
+				webcamAcquireId.current++;
+				setWebcamEnabledState(false);
+			}
+		}
+
+		if (!isCountdownRunActive(countdownRunToken)) {
+			teardownMedia();
+			return;
+		}
+
+		stream.current = new MediaStream();
+		const videoTrack = primaryMediaStream.getVideoTracks()[0];
+		if (!videoTrack) {
+			throw new Error("Video track is not available.");
+		}
+		stream.current.addTrack(videoTrack);
+
+		const systemAudioTrack = primaryMediaStream.getAudioTracks()[0];
+		const micAudioTrack = microphoneStream.current?.getAudioTracks()[0];
+		if (systemAudioTrack && micAudioTrack) {
+			const ctx = new AudioContext();
+			mixingContext.current = ctx;
+			const systemSource = ctx.createMediaStreamSource(new MediaStream([systemAudioTrack]));
+			const micSource = ctx.createMediaStreamSource(new MediaStream([micAudioTrack]));
+			const micGain = ctx.createGain();
+			micGain.gain.value = MIC_GAIN_BOOST;
+			const destination = ctx.createMediaStreamDestination();
+			systemSource.connect(destination);
+			micSource.connect(micGain).connect(destination);
+			stream.current.addTrack(destination.stream.getAudioTracks()[0]);
+		} else if (systemAudioTrack) {
+			stream.current.addTrack(systemAudioTrack);
+		} else if (micAudioTrack) {
+			stream.current.addTrack(micAudioTrack);
+		}
+
+		try {
+			await videoTrack.applyConstraints({
+				frameRate: { ideal: targetFrameRate, max: targetFrameRate },
+			});
+		} catch (constraintError) {
+			console.warn(
+				"Unable to apply the target frame rate, using the source track settings.",
+				constraintError,
+			);
+		}
+
+		if (!isCountdownRunActive(countdownRunToken)) {
+			teardownMedia();
+			return;
+		}
+
+		let {
+			width = DEFAULT_WIDTH,
+			height = DEFAULT_HEIGHT,
+			frameRate = targetFrameRate,
+		} = videoTrack.getSettings();
+		width = Math.floor(width / CODEC_ALIGNMENT) * CODEC_ALIGNMENT;
+		height = Math.floor(height / CODEC_ALIGNMENT) * CODEC_ALIGNMENT;
+
+		const videoBitsPerSecond = computeBitrate(width, height, targetFrameRate);
+		const mimeType = selectMimeType();
+		console.log(
+			`Recording at ${width}x${height} @ ${frameRate ?? targetFrameRate}fps using ${mimeType} / ${Math.round(
+				videoBitsPerSecond / BITS_PER_MEGABIT,
+			)} Mbps`,
+		);
+
+		if (!isCountdownRunActive(countdownRunToken)) {
+			teardownMedia();
+			return;
+		}
+
+		recordingId.current = Date.now();
+		const activeRecordingId = recordingId.current;
+		const activeCursorCaptureMode = recordingMode === "webcam-only" ? "system" : cursorCaptureMode;
+		recordingCursorCaptureMode.current = activeCursorCaptureMode;
+		const hasAudio = stream.current.getAudioTracks().length > 0;
+		screenRecorder.current = createRecorderHandle(
+			stream.current,
+			{
+				mimeType,
+				videoBitsPerSecond,
+				...(hasAudio
+					? { audioBitsPerSecond: systemAudioTrack ? AUDIO_BITRATE_SYSTEM : AUDIO_BITRATE_VOICE }
+					: {}),
+			},
+			`${RECORDING_FILE_PREFIX}${activeRecordingId}${VIDEO_FILE_EXTENSION}`,
+		);
+		screenRecorder.current.recorder.addEventListener(
+			"error",
+			() => {
+				setRecording(false);
+			},
+			{ once: true },
+		);
+
+		if (includeWebcamSidecar && webcamStream.current) {
+			webcamRecorder.current = createRecorderHandle(
+				webcamStream.current,
+				{ mimeType, videoBitsPerSecond: Math.min(videoBitsPerSecond, BITRATE_BASE) },
+				`${RECORDING_FILE_PREFIX}${activeRecordingId}${WEBCAM_FILE_SUFFIX}${VIDEO_FILE_EXTENSION}`,
+			);
+		}
+
+		accumulatedDurationMs.current = 0;
+		segmentStartedAt.current = Date.now();
+		allowAutoFinalize.current = true;
+		setRecording(true);
+		setPaused(false);
+		setElapsedSeconds(0);
+		window.electronAPI?.setRecordingState(true, activeRecordingId, activeCursorCaptureMode);
+
+		const activeScreenRecorder = screenRecorder.current;
+		const activeWebcamRecorder = webcamRecorder.current;
+		activeScreenRecorder.recorder.addEventListener(
+			"stop",
+			() => {
+				if (!allowAutoFinalize.current) {
+					return;
+				}
+				finalizeRecording(
+					activeScreenRecorder,
+					activeWebcamRecorder ?? null,
+					Math.max(0, getRecordingDurationMs()),
+					activeRecordingId,
+					activeCursorCaptureMode,
+				);
+			},
+			{ once: true },
+		);
+	};
+
 	const startNativeWindowsRecordingIfAvailable = async (
 		selectedSource: ProcessedDesktopSource,
 		countdownRunToken?: number,
@@ -894,6 +1085,7 @@ export function useScreenRecorder(): UseScreenRecorderReturn {
 			}
 
 			recordingId.current = result.recordingId;
+			recordingCursorCaptureMode.current = cursorCaptureMode;
 			nativeWindowsRecording.current = {
 				recordingId: result.recordingId,
 				finalizing: false,
@@ -948,20 +1140,7 @@ export function useScreenRecorder(): UseScreenRecorderReturn {
 			const windowId = parseMacWindowIdFromSourceId(selectedSource.id);
 			let nativeWebcamRecorder: RecorderHandle | null = null;
 			if (webcamEnabled) {
-				if (!webcamReady.current) {
-					await new Promise<void>((resolve) => {
-						const interval = setInterval(() => {
-							if (webcamReady.current) {
-								clearInterval(interval);
-								resolve();
-							}
-						}, 50);
-						setTimeout(() => {
-							clearInterval(interval);
-							resolve();
-						}, 5000);
-					});
-				}
+				await waitForWebcamReady();
 				if (!isCountdownRunActive(countdownRunToken)) {
 					return true;
 				}
@@ -1043,6 +1222,7 @@ export function useScreenRecorder(): UseScreenRecorderReturn {
 			}
 
 			recordingId.current = result.recordingId;
+			recordingCursorCaptureMode.current = cursorCaptureMode;
 			nativeMacRecording.current = {
 				recordingId: result.recordingId,
 				finalizing: false,
@@ -1071,17 +1251,19 @@ export function useScreenRecorder(): UseScreenRecorderReturn {
 		countdownRunId.current = runId;
 
 		let selectedSource: ProcessedDesktopSource | null = null;
-		try {
-			selectedSource = await window.electronAPI.getSelectedSource();
-		} catch (error) {
-			console.warn("Failed to read selected source before countdown:", error);
+		if (recordingMode === "screen") {
+			try {
+				selectedSource = await window.electronAPI.getSelectedSource();
+			} catch (error) {
+				console.warn("Failed to read selected source before countdown:", error);
+			}
 		}
 
 		if (!isCountdownRunActive(runId)) {
 			return;
 		}
 
-		if (!selectedSource) {
+		if (recordingMode === "screen" && !selectedSource) {
 			if (countdownRunId.current === runId) {
 				setCountdownActive(false);
 			}
@@ -1091,7 +1273,11 @@ export function useScreenRecorder(): UseScreenRecorderReturn {
 
 		try {
 			const platform = await window.electronAPI.getPlatform();
-			if (platform === "darwin" && cursorCaptureMode === "editable-overlay") {
+			if (
+				recordingMode === "screen" &&
+				platform === "darwin" &&
+				cursorCaptureMode === "editable-overlay"
+			) {
 				// The main process shows a native dialog that deep-links to the
 				// Accessibility settings pane when access is missing, so we just stop
 				// here and let the user grant it and press record again.
@@ -1158,6 +1344,31 @@ export function useScreenRecorder(): UseScreenRecorderReturn {
 
 	const startRecording = async (countdownRunToken?: number) => {
 		try {
+			if (recordingMode === "webcam-only") {
+				if (!webcamEnabled) {
+					throw new Error("Enable a webcam before recording.");
+				}
+				await waitForWebcamReady();
+				if (!isCountdownRunActive(countdownRunToken)) {
+					teardownMedia();
+					return;
+				}
+
+				const webcamTrack = webcamStream.current?.getVideoTracks()[0];
+				if (!webcamTrack || webcamTrack.readyState !== "live") {
+					throw new Error("Webcam video is not available.");
+				}
+
+				const webcamRecordingStream = new MediaStream([webcamTrack.clone()]);
+				await beginBrowserRecording(
+					webcamRecordingStream,
+					WEBCAM_TARGET_FRAME_RATE,
+					false,
+					countdownRunToken,
+				);
+				return;
+			}
+
 			const selectedSource = await window.electronAPI.getSelectedSource();
 			if (!selectedSource) {
 				alert(t("recording.selectSource"));
@@ -1225,191 +1436,12 @@ export function useScreenRecorder(): UseScreenRecorderReturn {
 					} as unknown as MediaStreamConstraints);
 				}
 			}
-			screenStream.current = screenMediaStream;
-
-			if (!isCountdownRunActive(countdownRunToken)) {
-				teardownMedia();
-				return;
-			}
-
-			if (microphoneEnabled) {
-				try {
-					microphoneStream.current = await navigator.mediaDevices.getUserMedia({
-						audio: microphoneDeviceId
-							? {
-									deviceId: { exact: microphoneDeviceId },
-									echoCancellation: true,
-									noiseSuppression: true,
-									autoGainControl: true,
-								}
-							: {
-									echoCancellation: true,
-									noiseSuppression: true,
-									autoGainControl: true,
-								},
-						video: false,
-					});
-				} catch (audioError) {
-					console.warn("Failed to get microphone access:", audioError);
-					toast.error(t("recording.microphoneDenied"));
-					setMicrophoneEnabled(false);
-				}
-			}
-
-			if (!isCountdownRunActive(countdownRunToken)) {
-				teardownMedia();
-				return;
-			}
-
-			if (webcamEnabled) {
-				if (!webcamReady.current) {
-					await new Promise<void>((resolve) => {
-						const interval = setInterval(() => {
-							if (webcamReady.current) {
-								clearInterval(interval);
-								resolve();
-							}
-						}, 50);
-						setTimeout(() => {
-							clearInterval(interval);
-							resolve();
-						}, 5000);
-					});
-				}
-				if (!webcamStream.current) {
-					webcamAcquireId.current++;
-					setWebcamEnabledState(false);
-				}
-			}
-
-			if (!isCountdownRunActive(countdownRunToken)) {
-				teardownMedia();
-				return;
-			}
-
-			stream.current = new MediaStream();
-			const videoTrack = screenMediaStream.getVideoTracks()[0];
-			if (!videoTrack) {
-				throw new Error("Video track is not available.");
-			}
-			stream.current.addTrack(videoTrack);
-
-			const systemAudioTrack = screenMediaStream.getAudioTracks()[0];
-			const micAudioTrack = microphoneStream.current?.getAudioTracks()[0];
-
-			if (systemAudioTrack && micAudioTrack) {
-				const ctx = new AudioContext();
-				mixingContext.current = ctx;
-				const systemSource = ctx.createMediaStreamSource(new MediaStream([systemAudioTrack]));
-				const micSource = ctx.createMediaStreamSource(new MediaStream([micAudioTrack]));
-				const micGain = ctx.createGain();
-				micGain.gain.value = MIC_GAIN_BOOST;
-				const destination = ctx.createMediaStreamDestination();
-				systemSource.connect(destination);
-				micSource.connect(micGain).connect(destination);
-				stream.current.addTrack(destination.stream.getAudioTracks()[0]);
-			} else if (systemAudioTrack) {
-				stream.current.addTrack(systemAudioTrack);
-			} else if (micAudioTrack) {
-				stream.current.addTrack(micAudioTrack);
-			}
-
-			try {
-				await videoTrack.applyConstraints({
-					frameRate: { ideal: TARGET_FRAME_RATE, max: TARGET_FRAME_RATE },
-				});
-			} catch (constraintError) {
-				console.warn(
-					"Unable to apply the target frame rate, using the source track settings.",
-					constraintError,
-				);
-			}
-
-			if (!isCountdownRunActive(countdownRunToken)) {
-				teardownMedia();
-				return;
-			}
-
-			let {
-				width = DEFAULT_WIDTH,
-				height = DEFAULT_HEIGHT,
-				frameRate = TARGET_FRAME_RATE,
-			} = videoTrack.getSettings();
-
-			width = Math.floor(width / CODEC_ALIGNMENT) * CODEC_ALIGNMENT;
-			height = Math.floor(height / CODEC_ALIGNMENT) * CODEC_ALIGNMENT;
-
-			const videoBitsPerSecond = computeBitrate(width, height);
-			const mimeType = selectMimeType();
-
-			console.log(
-				`Recording at ${width}x${height} @ ${frameRate ?? TARGET_FRAME_RATE}fps using ${mimeType} / ${Math.round(
-					videoBitsPerSecond / BITS_PER_MEGABIT,
-				)} Mbps`,
+			await beginBrowserRecording(
+				screenMediaStream,
+				TARGET_FRAME_RATE,
+				webcamEnabled,
+				countdownRunToken,
 			);
-
-			const hasAudio = stream.current.getAudioTracks().length > 0;
-			if (!isCountdownRunActive(countdownRunToken)) {
-				teardownMedia();
-				return;
-			}
-
-			recordingId.current = Date.now();
-			const activeRecordingId = recordingId.current;
-			screenRecorder.current = createRecorderHandle(
-				stream.current,
-				{
-					mimeType,
-					videoBitsPerSecond,
-					...(hasAudio
-						? { audioBitsPerSecond: systemAudioTrack ? AUDIO_BITRATE_SYSTEM : AUDIO_BITRATE_VOICE }
-						: {}),
-				},
-				`${RECORDING_FILE_PREFIX}${activeRecordingId}${VIDEO_FILE_EXTENSION}`,
-			);
-			screenRecorder.current.recorder.addEventListener(
-				"error",
-				() => {
-					setRecording(false);
-				},
-				{ once: true },
-			);
-
-			if (webcamStream.current) {
-				webcamRecorder.current = createRecorderHandle(
-					webcamStream.current,
-					{ mimeType, videoBitsPerSecond: Math.min(videoBitsPerSecond, BITRATE_BASE) },
-					`${RECORDING_FILE_PREFIX}${activeRecordingId}${WEBCAM_FILE_SUFFIX}${VIDEO_FILE_EXTENSION}`,
-				);
-			}
-
-			accumulatedDurationMs.current = 0;
-			segmentStartedAt.current = Date.now();
-			allowAutoFinalize.current = true;
-			setRecording(true);
-			setPaused(false);
-			setElapsedSeconds(0);
-			window.electronAPI?.setRecordingState(true, recordingId.current, cursorCaptureMode);
-
-			const activeScreenRecorder = screenRecorder.current;
-			const activeWebcamRecorder = webcamRecorder.current;
-			if (activeScreenRecorder) {
-				activeScreenRecorder.recorder.addEventListener(
-					"stop",
-					() => {
-						if (!allowAutoFinalize.current) {
-							return;
-						}
-						finalizeRecording(
-							activeScreenRecorder,
-							activeWebcamRecorder ?? null,
-							Math.max(0, getRecordingDurationMs()),
-							activeRecordingId,
-						);
-					},
-					{ once: true },
-				);
-			}
 		} catch (error) {
 			console.error("Failed to start recording:", error);
 			const errorMsg = error instanceof Error ? error.message : "Failed to start recording";

@@ -21,6 +21,7 @@
 	"webcam": {
 		"enableWebcam": "Activar cámara web",
 		"disableWebcam": "Desactivar cámara web",
+		"webcamOnly": "Solo cámara web",
 		"defaultCamera": "Cámara predeterminada",
 		"searching": "Buscando...",
 		"noneFound": "No se encontró cámara",
@@ -37,6 +38,7 @@
 		"defaultSourceName": "Pantalla"
 	},
 	"recording": {
+		"startRecording": "Iniciar grabación",
 		"selectSource": "Por favor selecciona una fuente para grabar"
 	},
 	"language": "Idioma",

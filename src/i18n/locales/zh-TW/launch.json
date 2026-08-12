@@ -21,6 +21,7 @@
 	"webcam": {
 		"enableWebcam": "啟用攝影機",
 		"disableWebcam": "停用攝影機",
+		"webcamOnly": "僅攝影機",
 		"defaultCamera": "預設攝影機",
 		"searching": "正在搜尋...",
 		"noneFound": "未找到攝影機",
@@ -37,6 +38,7 @@
 		"defaultSourceName": "螢幕"
 	},
 	"recording": {
+		"startRecording": "開始錄製",
 		"selectSource": "請選擇要錄製的來源"
 	},
 	"language": "語言",

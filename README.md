@@ -10,7 +10,7 @@
   <img src="public/sample.png" alt="OpenScreen editor with video effects and timeline controls" width="100%" />
 </p>
 
-This fork keeps the OpenScreen project format and editor features while adding full-source-resolution capture, lower memory use for long recordings, and direct-to-disk MP4 export.
+This fork keeps the OpenScreen project format and editor features while adding webcam-only recording, full-source-resolution screen capture, lower memory use for long recordings, and direct-to-disk MP4 export.
 
 ## Quickstart
 

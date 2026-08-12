@@ -21,6 +21,7 @@
 	"webcam": {
 		"enableWebcam": "启用摄像头",
 		"disableWebcam": "禁用摄像头",
+		"webcamOnly": "仅摄像头",
 		"defaultCamera": "默认摄像头",
 		"searching": "正在搜索...",
 		"noneFound": "未找到摄像头",
@@ -37,6 +38,7 @@
 		"defaultSourceName": "屏幕"
 	},
 	"recording": {
+		"startRecording": "开始录制",
 		"selectSource": "请选择要录制的源"
 	},
 	"language": "语言",
