@@ -346,8 +346,9 @@ final class ScreenCaptureRecorder: NSObject, SCStreamOutput, SCStreamDelegate {
 			guard let display = content.displays.first(where: { $0.displayID == displayId }) else {
 				throw HelperError.sourceNotFound("No ScreenCaptureKit display found for id \(displayId).")
 			}
-			let width = Int(CGDisplayPixelsWide(display.displayID))
-			let height = Int(CGDisplayPixelsHigh(display.displayID))
+			let scaleFactor = Self.scaleFactor(for: display.displayID)
+			let width = display.width * scaleFactor
+			let height = display.height * scaleFactor
 			return CaptureTarget(
 				filter: SCContentFilter(display: display, excludingWindows: []),
 				width: clampCaptureDimension(width, fallback: request.video.width),

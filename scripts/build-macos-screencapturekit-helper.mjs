@@ -37,29 +37,6 @@ const archs = (process.env.OPENSCREEN_MAC_HELPER_ARCHS ?? hostArch)
 	.filter(Boolean)
 	.map(normalizeArch);
 
-const xcodebuildVersion = spawnSync("xcodebuild", ["-version"], {
-	cwd: root,
-	encoding: "utf8",
-});
-
-if (xcodebuildVersion.status !== 0) {
-	const message = `${xcodebuildVersion.stderr ?? ""}${xcodebuildVersion.stdout ?? ""}`.trim();
-	console.error(
-		[
-			"Unable to build the macOS ScreenCaptureKit helper because full Xcode is not active.",
-			"",
-			message,
-			"",
-			"Install Xcode from the App Store or Apple Developer downloads, then run:",
-			"  sudo xcode-select --switch /Applications/Xcode.app/Contents/Developer",
-			"  sudo xcodebuild -license accept",
-			"",
-			"Command Line Tools alone may not include the Swift SDK/platform metadata required by SwiftPM.",
-		].join("\n"),
-	);
-	process.exit(1);
-}
-
 // SwiftPM writes a single-arch release build to <buildPath>/<swiftArch>-apple-macosx/release/<name>.
 // Fall back to a search that skips the identically-named file inside the .dSYM debug bundle (matching
 // that file and feeding it forward is what produced an unrunnable "exec format error" binary before).
